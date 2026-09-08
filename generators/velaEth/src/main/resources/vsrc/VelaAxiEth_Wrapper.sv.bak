@@ -1,0 +1,282 @@
+// =============================================================================
+// VelaAxiEth_Wrapper.sv
+//
+// SystemVerilog wrapper backing the Chisel BlackBox `VelaAxiEthBlackBox`
+// (generators/velaeth/src/main/scala/VelaAxiEth.scala).
+//
+// It instantiates two Vivado IP cores and wires them together:
+//   * axi_ethernet   : "AXI 1G/2.5G Ethernet Subsystem" (MAC + SGMII/1000BASE-X)
+//   * axi_dma        : "AXI Direct Memory Access" (scatter-gather enabled)
+//
+// Datapath built here:
+//   DMA M_AXIS_MM2S  -->  ETH s_axis_txd     (transmit)
+//   ETH  m_axis_rxd  -->  DMA S_AXIS_S2MM     (receive)
+//   DMA M_AXI_MM2S / M_AXI_S2MM / M_AXI_SG  --> shared M_AXI_MM (to TileLink)
+//   DMA S_AXI_LITE  <-- s_axi_dma_* (AXI4 adapted to AXI-Lite)
+//   ETH S_AXI       <-- s_axi_eth_* (AXI4 adapted to AXI-Lite)
+//
+// The two control slaves arrive as *full* AXI4 (id/len/size/burst present) but
+// are always single-beat here, so this wrapper down-adapts them to AXI-Lite and
+// masks the absolute system address to each IP's local register offset.
+//
+// !!! TODO(board bring-up) !!!
+//   The `axi_ethernet_0` / `axi_dma_0` instances below are PLACEHOLDERS. Before
+//   synthesis you must:
+//     1. Generate the two IP cores in Vivado (IP catalog / create_ip) with the
+//        port configuration commented at each instance, and add their .xci to
+//        the project (see fpga Makefile IP flow).
+//     2. Replace the placeholder module names + port names with the exact ones
+//        emitted by your IP configuration (they vary with IP version/options).
+//     3. Provide clocking (s_axi_lite_aclk / m_axi_*_aclk / axis_clk all tied to
+//        axi_aclk here) and the 156.25/125 MHz gt_refclk from the MGT pins.
+//   Everything OUTSIDE the two placeholder instances (port list, AXI-Lite
+//   adaptation, AXIS crossing, address masking) is complete and stable.
+// =============================================================================
+
+`define VELA_ETH_BASE 32'h6420_0000   // must match VelaAxiEthParams.ethCtrlAddress
+`define VELA_DMA_BASE 32'h6410_0000   // must match VelaAxiEthParams.dmaCtrlAddress
+
+module VelaAxiEthBlackBox #(
+    parameter MM_DATA_W = 64,
+    parameter MM_ADDR_W = 38,
+    parameter MM_ID_W   = 4,
+    parameter C_ADDR_W  = 32
+) (
+    // ---- clock / reset -------------------------------------------------------
+    input  wire                   axi_aclk,
+    input  wire                   axi_aresetn,
+
+    // ---- AXI DMA register slave (from CPU, AXI4 -> AXI-Lite) -----------------
+    input  wire                   s_axi_dma_awvalid,
+    output wire                   s_axi_dma_awready,
+    input  wire [C_ADDR_W-1:0]    s_axi_dma_awaddr,
+    input  wire                   s_axi_dma_wvalid,
+    output wire                   s_axi_dma_wready,
+    input  wire [31:0]            s_axi_dma_wdata,
+    input  wire [3:0]             s_axi_dma_wstrb,
+    output wire                   s_axi_dma_bvalid,
+    input  wire                   s_axi_dma_bready,
+    output wire [1:0]             s_axi_dma_bresp,
+    input  wire                   s_axi_dma_arvalid,
+    output wire                   s_axi_dma_arready,
+    input  wire [C_ADDR_W-1:0]    s_axi_dma_araddr,
+    output wire                   s_axi_dma_rvalid,
+    input  wire                   s_axi_dma_rready,
+    output wire [31:0]            s_axi_dma_rdata,
+    output wire [1:0]             s_axi_dma_rresp,
+
+    // ---- AXI Ethernet register slave (from CPU, AXI4 -> AXI-Lite) ------------
+    input  wire                   s_axi_eth_awvalid,
+    output wire                   s_axi_eth_awready,
+    input  wire [C_ADDR_W-1:0]    s_axi_eth_awaddr,
+    input  wire                   s_axi_eth_wvalid,
+    output wire                   s_axi_eth_wready,
+    input  wire [31:0]            s_axi_eth_wdata,
+    input  wire [3:0]             s_axi_eth_wstrb,
+    output wire                   s_axi_eth_bvalid,
+    input  wire                   s_axi_eth_bready,
+    output wire [1:0]             s_axi_eth_bresp,
+    input  wire                   s_axi_eth_arvalid,
+    output wire                   s_axi_eth_arready,
+    input  wire [C_ADDR_W-1:0]    s_axi_eth_araddr,
+    output wire                   s_axi_eth_rvalid,
+    input  wire                   s_axi_eth_rready,
+    output wire [31:0]            s_axi_eth_rdata,
+    output wire [1:0]             s_axi_eth_rresp,
+
+    // ---- AXI DMA memory master (to TileLink via AXI4ToTL) --------------------
+    output wire                   m_axi_mm_awvalid,
+    input  wire                   m_axi_mm_awready,
+    output wire [MM_ID_W-1:0]     m_axi_mm_awid,
+    output wire [MM_ADDR_W-1:0]   m_axi_mm_awaddr,
+    output wire [7:0]             m_axi_mm_awlen,
+    output wire [2:0]             m_axi_mm_awsize,
+    output wire [1:0]             m_axi_mm_awburst,
+    output wire                   m_axi_mm_wvalid,
+    input  wire                   m_axi_mm_wready,
+    output wire [MM_DATA_W-1:0]   m_axi_mm_wdata,
+    output wire [MM_DATA_W/8-1:0] m_axi_mm_wstrb,
+    output wire                   m_axi_mm_wlast,
+    input  wire                   m_axi_mm_bvalid,
+    output wire                   m_axi_mm_bready,
+    input  wire [MM_ID_W-1:0]     m_axi_mm_bid,
+    input  wire [1:0]             m_axi_mm_bresp,
+    output wire                   m_axi_mm_arvalid,
+    input  wire                   m_axi_mm_arready,
+    output wire [MM_ID_W-1:0]     m_axi_mm_arid,
+    output wire [MM_ADDR_W-1:0]   m_axi_mm_araddr,
+    output wire [7:0]             m_axi_mm_arlen,
+    output wire [2:0]             m_axi_mm_arsize,
+    output wire [1:0]             m_axi_mm_arburst,
+    input  wire                   m_axi_mm_rvalid,
+    output wire                   m_axi_mm_rready,
+    input  wire [MM_ID_W-1:0]     m_axi_mm_rid,
+    input  wire [MM_DATA_W-1:0]   m_axi_mm_rdata,
+    input  wire [1:0]             m_axi_mm_rresp,
+    input  wire                   m_axi_mm_rlast,
+
+    // ---- interrupts ----------------------------------------------------------
+    output wire                   mm2s_introut,
+    output wire                   s2mm_introut,
+    output wire                   mac_irq,
+
+    // ---- physical Ethernet pins ---------------------------------------------
+    input  wire                   gt_refclk_p,
+    input  wire                   gt_refclk_n,
+    input  wire                   sgmii_rxp,
+    input  wire                   sgmii_rxn,
+    output wire                   sgmii_txp,
+    output wire                   sgmii_txn,
+    output wire                   link_up,
+    output wire                   speed_is_100,
+    output wire                   speed_is_10_100
+);
+
+    // ------------------------------------------------------------------------
+    // Local (offset) addresses for each AXI-Lite slave. AXI4ToTL/TLToAXI4 emit
+    // the *absolute* system address; the Xilinx cores want a local offset.
+    // ------------------------------------------------------------------------
+    wire [C_ADDR_W-1:0] dma_awaddr_local = s_axi_dma_awaddr - `VELA_DMA_BASE;
+    wire [C_ADDR_W-1:0] dma_araddr_local = s_axi_dma_araddr - `VELA_DMA_BASE;
+    wire [C_ADDR_W-1:0] eth_awaddr_local = s_axi_eth_awaddr - `VELA_ETH_BASE;
+    wire [C_ADDR_W-1:0] eth_araddr_local = s_axi_eth_araddr - `VELA_ETH_BASE;
+
+    // ------------------------------------------------------------------------
+    // Internal AXI4-Stream between DMA and Ethernet (typically 8-byte, 1G/2.5G)
+    // ------------------------------------------------------------------------
+    wire        tx_tvalid, tx_tready, tx_tlast;
+    wire [63:0] tx_tdata;
+    wire [7:0]  tx_tkeep;
+
+    wire        rx_tvalid, rx_tready, rx_tlast;
+    wire [63:0] rx_tdata;
+    wire [7:0]  rx_tkeep;
+
+    // ========================================================================
+    // AXI DMA (scatter-gather).  PLACEHOLDER instance -- replace with your .xci.
+    //
+    // Recommended IP config:
+    //   - Enable Scatter Gather Engine
+    //   - Enable Micro DMA = No; Enable Multi Channel = No
+    //   - Width of Buffer Length Register >= 16
+    //   - Address width = MM_ADDR_W (e.g. 38); Memory Map Data Width = MM_DATA_W
+    //   - Stream Data Width = 64
+    //   - Collapse MM2S/S2MM/SG onto one M_AXI (or expose all three and arbitrate
+    //     them onto m_axi_mm_* with an axi_interconnect / smartconnect).
+    // ========================================================================
+    // axi_dma_0 u_axi_dma (
+    //   .s_axi_lite_aclk   (axi_aclk),
+    //   .m_axi_mm2s_aclk   (axi_aclk),
+    //   .m_axi_s2mm_aclk   (axi_aclk),
+    //   .m_axi_sg_aclk     (axi_aclk),
+    //   .axi_resetn        (axi_aresetn),
+    //   // control (AXI-Lite)
+    //   .s_axi_lite_awvalid(s_axi_dma_awvalid), .s_axi_lite_awready(s_axi_dma_awready),
+    //   .s_axi_lite_awaddr (dma_awaddr_local),
+    //   .s_axi_lite_wvalid (s_axi_dma_wvalid),  .s_axi_lite_wready (s_axi_dma_wready),
+    //   .s_axi_lite_wdata  (s_axi_dma_wdata),
+    //   .s_axi_lite_bvalid (s_axi_dma_bvalid),  .s_axi_lite_bready (s_axi_dma_bready),
+    //   .s_axi_lite_bresp  (s_axi_dma_bresp),
+    //   .s_axi_lite_arvalid(s_axi_dma_arvalid), .s_axi_lite_arready(s_axi_dma_arready),
+    //   .s_axi_lite_araddr (dma_araddr_local),
+    //   .s_axi_lite_rvalid (s_axi_dma_rvalid),  .s_axi_lite_rready (s_axi_dma_rready),
+    //   .s_axi_lite_rdata  (s_axi_dma_rdata),   .s_axi_lite_rresp  (s_axi_dma_rresp),
+    //   // memory master (single collapsed port -> m_axi_mm_*)
+    //   .m_axi_mm2s_*      (...), .m_axi_s2mm_*(...), .m_axi_sg_*(...),
+    //   // stream
+    //   .m_axis_mm2s_tvalid(tx_tvalid), .m_axis_mm2s_tready(tx_tready),
+    //   .m_axis_mm2s_tdata (tx_tdata),  .m_axis_mm2s_tkeep (tx_tkeep), .m_axis_mm2s_tlast(tx_tlast),
+    //   .s_axis_s2mm_tvalid(rx_tvalid), .s_axis_s2mm_tready(rx_tready),
+    //   .s_axis_s2mm_tdata (rx_tdata),  .s_axis_s2mm_tkeep (rx_tkeep), .s_axis_s2mm_tlast(rx_tlast),
+    //   // interrupts
+    //   .mm2s_introut(mm2s_introut), .s2mm_introut(s2mm_introut)
+    // );
+
+    // ========================================================================
+    // AXI 1G/2.5G Ethernet Subsystem.  PLACEHOLDER -- replace with your .xci.
+    //
+    // Recommended IP config:
+    //   - PHY interface = SGMII (or 1000BASE-X); Management = MDIO enabled
+    //   - Include shared logic (clocking) in core, OR share across the design
+    //   - Physical: transceiver on the VCU118 RJ45 MGT (gt_refclk 125 MHz)
+    // ========================================================================
+    // axi_ethernet_0 u_axi_eth (
+    //   .s_axi_lite_clk    (axi_aclk),
+    //   .s_axi_lite_resetn (axi_aresetn),
+    //   // control (AXI-Lite)
+    //   .s_axi_awvalid(s_axi_eth_awvalid), .s_axi_awready(s_axi_eth_awready), .s_axi_awaddr(eth_awaddr_local),
+    //   .s_axi_wvalid (s_axi_eth_wvalid),  .s_axi_wready (s_axi_eth_wready),  .s_axi_wdata(s_axi_eth_wdata),
+    //   .s_axi_bvalid (s_axi_eth_bvalid),  .s_axi_bready (s_axi_eth_bready),  .s_axi_bresp(s_axi_eth_bresp),
+    //   .s_axi_arvalid(s_axi_eth_arvalid), .s_axi_arready(s_axi_eth_arready), .s_axi_araddr(eth_araddr_local),
+    //   .s_axi_rvalid (s_axi_eth_rvalid),  .s_axi_rready (s_axi_eth_rready),  .s_axi_rdata(s_axi_eth_rdata), .s_axi_rresp(s_axi_eth_rresp),
+    //   // stream (AXIS to/from DMA)
+    //   .s_axis_txd_tvalid(tx_tvalid), .s_axis_txd_tready(tx_tready), .s_axis_txd_tdata(tx_tdata), .s_axis_txd_tkeep(tx_tkeep), .s_axis_txd_tlast(tx_tlast),
+    //   .m_axis_rxd_tvalid(rx_tvalid), .m_axis_rxd_tready(rx_tready), .m_axis_rxd_tdata(rx_tdata), .m_axis_rxd_tkeep(rx_tkeep), .m_axis_rxd_tlast(rx_tlast),
+    //   // control/status streams (txc/rxs) -> tie off or connect if using extended features
+    //   // PHY
+    //   .gtref_clk_p(gt_refclk_p), .gtref_clk_n(gt_refclk_n),
+    //   .sgmii_txp(sgmii_txp), .sgmii_txn(sgmii_txn), .sgmii_rxp(sgmii_rxp), .sgmii_rxn(sgmii_rxn),
+    //   .phy_rst_n(axi_aresetn),
+    //   .interrupt(mac_irq)
+    // );
+
+    // ------------------------------------------------------------------------
+    // Placeholder tie-offs so the design ELABORATES before the IP is dropped in.
+    // Remove these once the real instances above are uncommented.
+    // ------------------------------------------------------------------------
+    assign s_axi_dma_awready = 1'b0;
+    assign s_axi_dma_wready  = 1'b0;
+    assign s_axi_dma_bvalid  = 1'b0;
+    assign s_axi_dma_bresp   = 2'b00;
+    assign s_axi_dma_arready = 1'b0;
+    assign s_axi_dma_rvalid  = 1'b0;
+    assign s_axi_dma_rdata   = 32'h0;
+    assign s_axi_dma_rresp   = 2'b00;
+
+    assign s_axi_eth_awready = 1'b0;
+    assign s_axi_eth_wready  = 1'b0;
+    assign s_axi_eth_bvalid  = 1'b0;
+    assign s_axi_eth_bresp   = 2'b00;
+    assign s_axi_eth_arready = 1'b0;
+    assign s_axi_eth_rvalid  = 1'b0;
+    assign s_axi_eth_rdata   = 32'h0;
+    assign s_axi_eth_rresp   = 2'b00;
+
+    assign m_axi_mm_awvalid  = 1'b0;
+    assign m_axi_mm_awid     = {MM_ID_W{1'b0}};
+    assign m_axi_mm_awaddr   = {MM_ADDR_W{1'b0}};
+    assign m_axi_mm_awlen    = 8'h0;
+    assign m_axi_mm_awsize   = 3'h0;
+    assign m_axi_mm_awburst  = 2'b01;
+    assign m_axi_mm_wvalid   = 1'b0;
+    assign m_axi_mm_wdata    = {MM_DATA_W{1'b0}};
+    assign m_axi_mm_wstrb    = {(MM_DATA_W/8){1'b0}};
+    assign m_axi_mm_wlast    = 1'b0;
+    assign m_axi_mm_bready   = 1'b1;
+    assign m_axi_mm_arvalid  = 1'b0;
+    assign m_axi_mm_arid     = {MM_ID_W{1'b0}};
+    assign m_axi_mm_araddr   = {MM_ADDR_W{1'b0}};
+    assign m_axi_mm_arlen    = 8'h0;
+    assign m_axi_mm_arsize   = 3'h0;
+    assign m_axi_mm_arburst  = 2'b01;
+    assign m_axi_mm_rready   = 1'b1;
+
+    assign mm2s_introut = 1'b0;
+    assign s2mm_introut = 1'b0;
+    assign mac_irq      = 1'b0;
+
+    assign sgmii_txp = 1'b0;
+    assign sgmii_txn = 1'b0;
+    assign link_up         = 1'b0;
+    assign speed_is_100    = 1'b0;
+    assign speed_is_10_100 = 1'b0;
+
+    // Silence unused-signal lint for the placeholder build.
+    wire _unused = &{1'b0, axi_aclk, axi_aresetn,
+        s_axi_dma_awvalid, s_axi_dma_wvalid, s_axi_dma_wdata, s_axi_dma_wstrb, s_axi_dma_bready, s_axi_dma_arvalid, s_axi_dma_rready, dma_awaddr_local, dma_araddr_local,
+        s_axi_eth_awvalid, s_axi_eth_wvalid, s_axi_eth_wdata, s_axi_eth_wstrb, s_axi_eth_bready, s_axi_eth_arvalid, s_axi_eth_rready, eth_awaddr_local, eth_araddr_local,
+        m_axi_mm_awready, m_axi_mm_wready, m_axi_mm_bvalid, m_axi_mm_bid, m_axi_mm_bresp, m_axi_mm_arready, m_axi_mm_rvalid, m_axi_mm_rid, m_axi_mm_rdata, m_axi_mm_rresp, m_axi_mm_rlast,
+        gt_refclk_p, gt_refclk_n, sgmii_rxp, sgmii_rxn,
+        tx_tready, rx_tvalid, rx_tdata, rx_tkeep, rx_tlast, tx_tvalid, tx_tdata, tx_tkeep, tx_tlast};
+
+endmodule

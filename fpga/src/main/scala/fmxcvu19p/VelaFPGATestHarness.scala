@@ -1,0 +1,108 @@
+package chipyard.fpga.fmxcvu19p 
+
+import chisel3._
+import chisel3.experimental.{Analog}
+import freechips.rocketchip.diplomacy._
+import org.chipsalliance.cde.config._
+import freechips.rocketchip.subsystem._
+import freechips.rocketchip.tilelink._
+
+import sifive.fpgashells.shell._
+import sifive.fpgashells.shell.xilinx._
+import sifive.fpgashells.ip.xilinx._
+import sifive.fpgashells.clocks._
+
+import sifive.blocks.devices.uart._
+import sifive.blocks.devices.spi._
+import sifive.blocks.devices.gpio._
+
+import chipyard._
+import chipyard.harness._
+import chipyard.iobinders._
+
+class VelaFPGATestHarness(override implicit val p: Parameters) extends FMXCVU19PFPGATestHarness()(p) {
+  val ethIO = 
+    Some(InModuleBody {
+      val io = IO(new Bundle {
+        val eth_gt_refclk_p = Input(Clock())
+        val eth_gt_refclk_n = Input(Clock())
+        val sgmii_rxp = Input(Bool())
+        val sgmii_rxn = Input(Bool())
+        val sgmii_txp = Output(Bool())
+        val sgmii_txn = Output(Bool())
+        val link_up = Output(Bool())
+        val speed_is_100 = Output(Bool())
+        val speed_is_10_100 = Output(Bool())
+      })
+      io.suggestName("ethIO")
+
+      // Default drivers for every output sink.
+      // ethIO is created unconditionally (the old VelaFMXCVU19PBuildConfig.useNPU
+      // gate is gone), but only a config that punches an EthernetPort
+      // (WithVelaAxiEthAdapter / WithXilinxEthAdapter) pulls in a WithEthernetPins
+      // binder to drive these. Without defaults, an Ethernet-less config such as
+      // RocketHugePoolGemmini fails with "sink ethIO_* not fully initialized".
+      // InModuleBody blocks run inside LazyRawModuleImp.instantiate(), i.e.
+      // BEFORE the harness Imp body calls instantiateChipTops(), so the
+      // HarnessBinder's connections come later and win by last-connect.
+      //io.sgmii_txp       := false.B
+      //io.sgmii_txn       := false.B
+      //io.link_up         := false.B
+      //io.speed_is_100    := false.B
+      //io.speed_is_10_100 := false.B
+
+      // Add XDC constraints for RJ45/SGMII pins (FMXCVU19P SGMII via Bank 67 LVDS Bitslice)
+      // Based on FMXCVU19P Board User Guide (UG1224) and gig_ethernet_pcs_pma IP requirements
+      // Reference: FMXCVU19P has SGMII on J52 RJ45 connector using LVDS bitslice transceivers
+
+      // 125MHz SGMII reference clock (typically from onboard oscillator or external source)
+      // For FMXCVU19P, use SGMII reference clock 2 (MGTREFCLK2) which can be 125MHz
+      xdc.addPackagePin(io.eth_gt_refclk_p, "G14")   // SGMII_REF_CLK_P (Bank /)
+      xdc.addPackagePin(io.eth_gt_refclk_n, "F14")   // SGMII_REF_CLK_P (Bank /)
+
+      // SGMII LVDS pairs - Bank 67 (HP I/O bank for SGMII on FMXCVU19P)
+      // These are connected to the Ethernet PHY for SGMII interface
+      // Note: Actual pins depend on FMXCVU19P board revision - verify with board schematic
+      xdc.addPackagePin(io.sgmii_rxp.asBool, "K15")  // Bank 67 LVDS RX+ (from PHY to FPGA)
+      xdc.addPackagePin(io.sgmii_rxn.asBool, "J15")  // Bank 67 LVDS RX- (from PHY to FPGA)
+      xdc.addPackagePin(io.sgmii_txp.asBool, "K14")  // Bank 67 LVDS TX+ (from FPGA to PHY)
+      xdc.addPackagePin(io.sgmii_txn.asBool, "K13")  // Bank 67 LVDS TX- (from FPGA to PHY)
+      // Indicator
+      xdc.addPackagePin(io.link_up, "CA11")    // To LED GPIO_LED Yellow
+      xdc.addPackagePin(io.speed_is_100, "CB14") // To LED GPIO_LED Red
+      xdc.addPackagePin(io.speed_is_10_100, "CC11")  // To LED GPIO_LED Green
+
+      // Add I/O standards for SGMII pins
+      xdc.addIOStandard(io.eth_gt_refclk_p, "LVDS")
+      xdc.addIOStandard(io.eth_gt_refclk_n, "LVDS")
+      xdc.addIOStandard(io.sgmii_rxp, "LVDS")
+      xdc.addIOStandard(io.sgmii_rxn, "LVDS")
+      xdc.addIOStandard(io.sgmii_txp, "LVDS")
+      xdc.addIOStandard(io.sgmii_txn, "LVDS")
+
+      // On-die 100-ohm differential termination on the LVDS *inputs* (the SGMII
+      // receive pair and the 125 MHz reference clock). 
+      xdc.addDiffTermAdv(io.sgmii_rxp, "TERM_100")
+      xdc.addDiffTermAdv(io.sgmii_rxn, "TERM_100")
+      xdc.addDiffTermAdv(io.eth_gt_refclk_p, "TERM_100")
+      xdc.addDiffTermAdv(io.eth_gt_refclk_n, "TERM_100")
+
+      xdc.addIOStandard(io.link_up, "LVCMOS18")
+      xdc.addIOStandard(io.speed_is_10_100, "LVCMOS18")
+      xdc.addIOStandard(io.speed_is_100, "LVCMOS18")
+
+      println("[VelaQSFPTestHarness] Ethernet/SGMII IO ENABLED")
+
+      io
+    })
+
+  override lazy val module = new VelaFPGATestHarnessImp(this)
+}
+
+class VelaFPGATestHarnessImp(_outer: VelaFPGATestHarness) extends FMXCVU19PFPGATestHarnessImp(_outer) {
+
+  // Provide access to outer harness for harness binder - following FMXCVU19P pattern  
+  // No separate pin definitions or connections needed
+  println("[DEBUG] VelaFPGATestHarness: Physical pins ready for HarnessBinder connection")
+
+}

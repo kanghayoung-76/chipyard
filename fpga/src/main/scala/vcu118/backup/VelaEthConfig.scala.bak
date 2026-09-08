@@ -1,0 +1,123 @@
+package chipyard.fpga.vcu118
+
+import sys.process._
+
+import org.chipsalliance.cde.config.{Config, Parameters}
+import freechips.rocketchip.subsystem.{SystemBusKey, PeripheryBusKey, ControlBusKey, ExtMem, FBUS, PBUS}
+import freechips.rocketchip.devices.debug.{DebugModuleKey, ExportDebug, JTAG}
+import freechips.rocketchip.devices.tilelink.{DevNullParams, BootROMLocated}
+import freechips.rocketchip.diplomacy.{RegionType, AddressSet}
+import freechips.rocketchip.resources.{DTSModel, DTSTimebase}
+
+import sifive.blocks.devices.spi.{PeripherySPIKey, SPIParams}
+import sifive.blocks.devices.uart.{PeripheryUARTKey, UARTParams}
+
+import sifive.fpgashells.shell.{DesignKey}
+import sifive.fpgashells.shell.xilinx.{VCU118ShellPMOD, VCU118DDRSize}
+
+import testchipip.serdes.{SerialTLKey}
+import saturn.common.{VectorParams}
+
+import chipyard._
+import chipyard.harness._
+import chipyard.iobinders._
+import icenet.{NICAttachKey}
+
+// Custom VCU118 tweaks without WithETHPassthrough (handled internally by OMNI)
+class WithEthernet extends Config(
+  new icenet.WithIceNIC ++
+  new Config((site, here, up) => {
+    case NICAttachKey => icenet.NICAttachParams(
+      masterWhere = FBUS,
+      slaveWhere = PBUS
+    )
+  })
+)
+
+class WithVCU118RJ45Tweaks extends Config(
+  // clocking
+  new chipyard.harness.WithAllClocksFromHarnessClockInstantiator ++
+  new chipyard.clocking.WithPassthroughClockGenerator ++
+  new chipyard.config.WithUniformBusFrequencies(100) ++
+  new WithFPGAFrequency(100) ++                       // default 100MHz freq
+  // harness binders
+  new WithUART ++
+  new WithSPISDCard ++
+  new WithDDRMem ++
+  new WithEthernet ++
+  new WithJTAG ++
+  // other configuration
+  //new WithDefaultPeripherals ++
+  new WithFMCSDPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++ // add SPI controller
+  new chipyard.config.WithTLBackingMemory ++          // use TL backing memory
+  new WithSystemModifications ++                      // setup busses, use sdboot bootrom, setup ext. mem. size
+  new chipyard.config.WithNoDebug ++                  // remove debug module
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new freechips.rocketchip.subsystem.WithNMemoryChannels(1)
+)
+
+  
+/**
+ * Basic dual network configuration with single Rocket core
+ * - RJ45: IceNIC for TCP/IP networking  
+ * - QSFP: OmniXtend 10G for cache-coherent memory access (single lane)
+ */
+class VelaETHTestVCU118 extends Config(
+  new WithFPGAFrequency(100) ++
+  new WithVelaTestHarness ++                      // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithVCU118RJ45Tweaks ++                     // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++                         // HarnessBinder for Ethernet/SGMII pins
+  new chipyard.iobinders.WithXilinxEthAdapter ++  // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  Rockect Core + Gemmini(with Pipeline in PE)
+ *  default 1 Mig
+**/
+class VelaRocketHugeGemminiVCU118 extends Config(
+  new FPGAGemminiConfig ++                              // FPGA-optimized Gemmini with increased pipeline latency
+  new WithVelaTestHarness ++                            // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithVCU118RJ45Tweaks ++                           // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++                               // HarnessBinder for Ethernet/SGMII pins
+  new chipyard.iobinders.WithXilinxEthAdapter ++        // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  Boom Core + Gemmini
+ *  default 1 Mig
+**/
+
+class VelaBoomMediumGemmini extends Config(
+  new gemmini.DefaultGemminiConfig ++
+  new WithVelaTestHarness ++                            // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithVCU118RJ45Tweaks ++                           // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++                               // HarnessBinder for Ethernet/SGMII pins
+  new chipyard.iobinders.WithXilinxEthAdapter ++        // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new boom.v3.common.WithNMediumBooms(1) ++     
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  Boom Core + Gemmini + Saturn
+ *  default 1 Mig
+**/
+class VelaBoomMediumGemminiSaturn extends Config(
+  new gemmini.DefaultGemminiConfig ++
+  new saturn.rocket.WithRocketVectorUnit(512, 256, VectorParams.refParams) ++
+  new chipyard.config.WithSystemBusWidth(256) ++
+  new WithVelaTestHarness ++                            // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithVCU118RJ45Tweaks ++                           // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++                               // HarnessBinder for Ethernet/SGMII pins
+  new chipyard.iobinders.WithXilinxEthAdapter ++        // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new boom.v3.common.WithNMediumBooms(1) ++     
+  new chipyard.config.AbstractConfig)

@@ -1,0 +1,392 @@
+// See LICENSE for license details.
+//
+// VelaAxiEth: Xilinx "AXI 1G/2.5G Ethernet Subsystem" (MAC) + "AXI DMA" (SG) +
+// "AXI SmartConnect", packaged as a Vivado BLOCK DESIGN and wrapped as a
+// Chipyard diplomatic peripheral.
+//
+// The block design (fpga-shells/xilinx/vcu118/tcl/create_vela_eth_dma_bd.tcl)
+// contains all three IP wired internally; `make_wrapper` emits the Verilog module
+// `vela_eth_dma_wrapper`, which this Chisel BlackBox binds to directly (no hand
+// wired SV wrapper). Rationale: in Vivado 2025.2 the AXI Interconnect is
+// IP-Integrator-only and SmartConnect needs OOC synth, so a Block Design is the
+// only way to use them in this inline-synth flow.
+//
+// Boundary of vela_eth_dma_wrapper (what this blackbox binds to):
+//   M_AXI_MM   : 64b/38b AXI4 master, ID-less  --AXI4ToTL-->  FBUS (DRAM)
+//   S_AXI_DMA  : AXI4-Lite (10b) , S_AXI_ETH: AXI4-Lite (18b)  <--TLToAXI4-- PBUS
+//   mm2s_introut / s2mm_introut / mac_irq       --> PLIC (ibus)
+//   sgmii + lvds_clk(125MHz) + phy_rst_n        --> VCU118 RJ45 pins
+//   (MDIO is exposed by the BD but intentionally NOT bound here yet -- it is an
+//    inout and needs Analog plumbing; the link auto-negotiates without it.)
+package riscvvela
+
+import chisel3._
+import chisel3.util._
+
+import org.chipsalliance.cde.config.Parameters
+import freechips.rocketchip.diplomacy._
+import freechips.rocketchip.resources.SimpleDevice
+import freechips.rocketchip.amba.axi4._
+import freechips.rocketchip.tilelink._
+import freechips.rocketchip.interrupts._
+
+/** Parameters for the AXI-Ethernet + AXI-DMA block-design peripheral.
+  *
+  * Addresses/widths must match create_vela_eth_dma_bd.tcl and the DTS overlay.
+  */
+case class VelaAxiEthParams(
+  dmaCtrlAddress: BigInt = 0x64100000L,
+  dmaCtrlSize:    BigInt = 0x10000L,
+  ethCtrlAddress: BigInt = 0x64200000L,
+  ethCtrlSize:    BigInt = 0x40000L,
+  mmDataBits:     Int    = 64,   // M_AXI_MM data width (BD forces M00 to 64)
+  mmAddrBits:     Int    = 38,   // M_AXI_MM address width
+  nInterrupts:    Int    = 3     // [mm2s, s2mm, mac]
+  // NOTE: no MAC address here -- for the mainline xilinx_axienet driver the MAC
+  // is set via the DTS `local-mac-address` (see vela-axi-eth.dtsi), programmed
+  // into the MAC at runtime. There is no hardware MAC tie (unlike IceNIC).
+)
+
+/** Physical Ethernet pins carried out to the VCU118 RJ45 (LVDS SGMII). */
+class VelaEthSgmiiIO extends Bundle {
+  val lvds_clk_clk_p = Input(Clock())   // 125 MHz LVDS reference (was gt_refclk)
+  val lvds_clk_clk_n = Input(Clock())
+  val sgmii_rxp      = Input(Bool())
+  val sgmii_rxn      = Input(Bool())
+  val sgmii_txp      = Output(Bool())
+  val sgmii_txn      = Output(Bool())
+  // NOTE: phy_rst_n and MDIO exist on the BD wrapper but are deferred (not
+  // surfaced to pins yet) so the existing EthernetIOBundle/harness can be reused.
+}
+
+/** BlackBox bound to the block design's generated wrapper `vela_eth_dma_wrapper`.
+  * Port names/widths are the BD wrapper's exact boundary. */
+class VelaAxiEthBlackBox(params: VelaAxiEthParams) extends BlackBox 
+//( 
+//  Map (
+//    "MM_DATA_W" -> IntParam(params.mmDataBits),
+//    "MM_ADDR_W" -> IntParam(params.mmAddrBits)
+//    )
+//  )
+{
+  val MD = params.mmDataBits
+  val MA = params.mmAddrBits
+  override def desiredName = "vela_eth_dma_wrapper"
+
+  val io = IO(new Bundle {
+    val axi_aclk    = Input(Clock())
+    val axi_aresetn = Input(Bool())
+
+    // ---- M_AXI_MM : 64b/38b AXI4 memory master (ID-less) --------------------
+    val M_AXI_MM_awaddr  = Output(UInt(MA.W))
+    val M_AXI_MM_awlen   = Output(UInt(8.W))
+    val M_AXI_MM_awsize  = Output(UInt(3.W))
+    val M_AXI_MM_awburst = Output(UInt(2.W))
+    val M_AXI_MM_awlock  = Output(UInt(1.W))
+    val M_AXI_MM_awcache = Output(UInt(4.W))
+    val M_AXI_MM_awprot  = Output(UInt(3.W))
+    val M_AXI_MM_awqos   = Output(UInt(4.W))
+    val M_AXI_MM_awvalid = Output(Bool())
+    val M_AXI_MM_awready = Input(Bool())
+    val M_AXI_MM_wdata   = Output(UInt(MD.W))
+    val M_AXI_MM_wstrb   = Output(UInt((MD/8).W))
+    val M_AXI_MM_wlast   = Output(Bool())
+    val M_AXI_MM_wvalid  = Output(Bool())
+    val M_AXI_MM_wready  = Input(Bool())
+    val M_AXI_MM_bresp   = Input(UInt(2.W))
+    val M_AXI_MM_bvalid  = Input(Bool())
+    val M_AXI_MM_bready  = Output(Bool())
+    val M_AXI_MM_araddr  = Output(UInt(MA.W))
+    val M_AXI_MM_arlen   = Output(UInt(8.W))
+    val M_AXI_MM_arsize  = Output(UInt(3.W))
+    val M_AXI_MM_arburst = Output(UInt(2.W))
+    val M_AXI_MM_arlock  = Output(UInt(1.W))
+    val M_AXI_MM_arcache = Output(UInt(4.W))
+    val M_AXI_MM_arprot  = Output(UInt(3.W))
+    val M_AXI_MM_arqos   = Output(UInt(4.W))
+    val M_AXI_MM_arvalid = Output(Bool())
+    val M_AXI_MM_arready = Input(Bool())
+    val M_AXI_MM_rdata   = Input(UInt(MD.W))
+    val M_AXI_MM_rresp   = Input(UInt(2.W))
+    val M_AXI_MM_rlast   = Input(Bool())
+    val M_AXI_MM_rvalid  = Input(Bool())
+    val M_AXI_MM_rready  = Output(Bool())
+
+    // ---- S_AXI_DMA : AXI4-Lite control, 10-bit local addr, no wstrb ---------
+    val S_AXI_DMA_awaddr  = Input(UInt(10.W))
+    val S_AXI_DMA_awvalid = Input(Bool())
+    val S_AXI_DMA_awready = Output(Bool())
+    val S_AXI_DMA_wdata   = Input(UInt(32.W))
+    val S_AXI_DMA_wvalid  = Input(Bool())
+    val S_AXI_DMA_wready  = Output(Bool())
+    val S_AXI_DMA_bresp   = Output(UInt(2.W))
+    val S_AXI_DMA_bvalid  = Output(Bool())
+    val S_AXI_DMA_bready  = Input(Bool())
+    val S_AXI_DMA_araddr  = Input(UInt(10.W))
+    val S_AXI_DMA_arvalid = Input(Bool())
+    val S_AXI_DMA_arready = Output(Bool())
+    val S_AXI_DMA_rdata   = Output(UInt(32.W))
+    val S_AXI_DMA_rresp   = Output(UInt(2.W))
+    val S_AXI_DMA_rvalid  = Output(Bool())
+    val S_AXI_DMA_rready   = Input(Bool())
+
+    // ---- S_AXI_ETH : AXI4-Lite control, 18-bit local addr, with wstrb -------
+    val S_AXI_ETH_awaddr  = Input(UInt(18.W))
+    val S_AXI_ETH_awvalid = Input(Bool())
+    val S_AXI_ETH_awready = Output(Bool())
+    val S_AXI_ETH_wdata   = Input(UInt(32.W))
+    val S_AXI_ETH_wstrb   = Input(UInt(4.W))
+    val S_AXI_ETH_wvalid  = Input(Bool())
+    val S_AXI_ETH_wready  = Output(Bool())
+    val S_AXI_ETH_bresp   = Output(UInt(2.W))
+    val S_AXI_ETH_bvalid  = Output(Bool())
+    val S_AXI_ETH_bready  = Input(Bool())
+    val S_AXI_ETH_araddr  = Input(UInt(18.W))
+    val S_AXI_ETH_arvalid = Input(Bool())
+    val S_AXI_ETH_arready = Output(Bool())
+    val S_AXI_ETH_rdata   = Output(UInt(32.W))
+    val S_AXI_ETH_rresp   = Output(UInt(2.W))
+    val S_AXI_ETH_rvalid  = Output(Bool())
+    val S_AXI_ETH_rready  = Input(Bool())
+
+    // ---- interrupts ----------------------------------------------------------
+    val mm2s_introut = Output(Bool())
+    val s2mm_introut = Output(Bool())
+    val mac_irq      = Output(Bool())
+
+    // ---- physical Ethernet pins (LVDS SGMII) --------------------------------
+    val lvds_clk_clk_p = Input(Clock())
+    val lvds_clk_clk_n = Input(Clock())
+    val sgmii_rxp      = Input(Bool())
+    val sgmii_rxn      = Input(Bool())
+    val sgmii_txp      = Output(Bool())
+    val sgmii_txn      = Output(Bool())
+    val phy_rst_n      = Output(UInt(1.W))
+    // NOTE: mdio_mdc / mdio_mdio_io exist on vela_eth_dma_wrapper but are left
+    // unbound here (inout -> Analog, deferred). Vivado leaves them unconnected.
+  })
+
+  println("[VelaAxiEth] BlackBox bound to block-design wrapper vela_eth_dma_wrapper")
+}
+
+/** Named mixin so `vela.module.sgmii` keeps a stable type. */
+trait HasVelaEthSgmii { def sgmii: VelaEthSgmiiIO }
+
+class VelaAxiEth(params: VelaAxiEthParams)(implicit p: Parameters) extends LazyModule {
+
+  // Custom DTS devices that emit the xilinx_axienet driver glue automatically
+  // (phy-mode, axistream-connected, phy-handle/mdio) -> generated .dts is
+  // driver-ready, no overlay merge needed. See VelaEthDtsDevices.scala.
+  val dmaDevice = new VelaEthDmaDtsDevice
+  val ethDevice = new VelaEthMacDtsDevice(dmaDevice)
+
+  // --- DMA memory master (ID-less): AXI4 -> TL into FBUS ----------------------
+  val mm_axi_node = AXI4MasterNode(Seq(AXI4MasterPortParameters(
+    masters = Seq(AXI4MasterParameters(name = "vela_axi_dma", id = IdRange(0, 1))))))
+
+  val dma_tl_node = TLIdentityNode()
+  (dma_tl_node
+    := TLBuffer()
+    // TLFIFOFixer is REQUIRED here, mirroring rocket-chip's canonical AXI4
+    // master-into-FBUS chain (subsystem/Ports.scala, CanHaveSlaveAXI4Port).
+    // AXI4Fragmenter splits each MM2S burst at the 64B blockBytes boundary and
+    // AXI4ToTL gives every fragment its own TL source, so their D responses may
+    // return out of order.  AXI4ToTL replays R beats in D-arrival order, and the
+    // Xilinx AXI DMA uses a single ARID and assumes in-order return -> whole
+    // 64B blocks come out permuted on the wire (observed: [B0 B1 B2] -> [B2 B0 B1]).
+    // The corruption is invisible to the IP/TCP/UDP checksums (the permutation is
+    // 2-byte aligned, so the 1s-complement sum is unchanged) and to the FCS.
+    // AXI4ToTL's own edgeOut.manager.requireFifo() does NOT catch this: its default
+    // policy is TLFIFOFixer.allFIFO, which skips managers with fifoId = None.
+    := TLFIFOFixer(TLFIFOFixer.all)
+    := TLWidthWidget(params.mmDataBits / 8)
+    := AXI4ToTL()
+    // Keep 16 outstanding: AXI4Fragmenter cuts every MM2S burst into 64B pieces,
+    // so Some(1) would serialise them and cap TX at 64B/round-trip (well under
+    // 1Gbps at 100MHz), and it caps AWID flight too, throttling S2MM/RX as well.
+    // Only drop to Some(1) as a fallback diagnostic if the TLFIFOFixer above does
+    // NOT clear the 64B block reordering -- that would rule out the read-response
+    // path entirely, at the cost of a slow build.
+    := AXI4UserYanker(capMaxFlight = Some(16))
+    := AXI4Fragmenter()
+    := AXI4Buffer()
+    := mm_axi_node)
+
+  // --- Control slaves: TL -> AXI4-Lite ---------------------------------------
+  private def ctrlSlaveNode(base: BigInt, size: BigInt, dev: SimpleDevice) =
+    AXI4SlaveNode(Seq(AXI4SlavePortParameters(
+      slaves = Seq(AXI4SlaveParameters(
+        address       = Seq(AddressSet(base, size - 1)),
+        resources     = dev.reg("control"),
+        regionType    = RegionType.UNCACHED,
+        executable    = false,
+        supportsWrite = TransferSizes(1, 4),
+        supportsRead  = TransferSizes(1, 4),
+        interleavedId = Some(0))),
+      beatBytes = 4)))
+
+  val dmaCtrlAxiNode = ctrlSlaveNode(params.dmaCtrlAddress, params.dmaCtrlSize, dmaDevice)
+  val ethCtrlAxiNode = ctrlSlaveNode(params.ethCtrlAddress, params.ethCtrlSize, ethDevice)
+
+  val dmaCtrlTLNode = TLIdentityNode()
+  val ethCtrlTLNode = TLIdentityNode()
+  (dmaCtrlAxiNode := AXI4Buffer() := TLToAXI4() := dmaCtrlTLNode)
+  (ethCtrlAxiNode := AXI4Buffer() := TLToAXI4() := ethCtrlTLNode)
+
+  // Interrupts are split across the two DTS nodes on purpose: xilinx_axienet
+  // reads the DMA rx/tx IRQs out of the axistream-connected (dma@) node but its
+  // own core IRQ out of the ethernet@ node, so a single 3-wide source bound to
+  // the DMA device leaves the MAC IRQ invisible to the driver.
+  //   int_node     -> dma@ : [mm2s, s2mm]
+  //   mac_int_node -> eth@ : [mac]
+  // Attach order in the periphery trait fixes the PLIC numbering (mm2s, s2mm,
+  // then mac), which matches the wiring below.
+  require(params.nInterrupts == 3, s"expected [mm2s, s2mm, mac], got ${params.nInterrupts}")
+  val int_node     = IntSourceNode(IntSourcePortSimple(num = 2, resources = dmaDevice.int))
+  val mac_int_node = IntSourceNode(IntSourcePortSimple(num = 1, resources = ethDevice.int))
+
+  lazy val module = new LazyModuleImp(this) with HasVelaEthSgmii {
+    val blackbox = Module(new VelaAxiEthBlackBox(params))
+
+    // Physical Ethernet pins surfaced for the subsystem trait to lift up.
+    val sgmii = IO(new VelaEthSgmiiIO)
+    sgmii.sgmii_txp := blackbox.io.sgmii_txp
+    sgmii.sgmii_txn := blackbox.io.sgmii_txn
+    blackbox.io.sgmii_rxp      := sgmii.sgmii_rxp
+    blackbox.io.sgmii_rxn      := sgmii.sgmii_rxn
+    blackbox.io.lvds_clk_clk_p := sgmii.lvds_clk_clk_p
+    blackbox.io.lvds_clk_clk_n := sgmii.lvds_clk_clk_n
+    // blackbox.io.phy_rst_n is an ignored output (PHY reset deferred)
+
+    blackbox.io.axi_aclk    := clock
+    blackbox.io.axi_aresetn := (~reset.asBool)
+
+    // -- control slave: AXI DMA regs (no wstrb) ------------------------------
+    connectCtrl(dmaCtrlAxiNode.in(0)._1,
+      awvalid = blackbox.io.S_AXI_DMA_awvalid, awready = blackbox.io.S_AXI_DMA_awready, awaddr = blackbox.io.S_AXI_DMA_awaddr,
+      wvalid  = blackbox.io.S_AXI_DMA_wvalid,  wready  = blackbox.io.S_AXI_DMA_wready,  wdata  = blackbox.io.S_AXI_DMA_wdata, wstrb = None,
+      bvalid  = blackbox.io.S_AXI_DMA_bvalid,  bready  = blackbox.io.S_AXI_DMA_bready,  bresp  = blackbox.io.S_AXI_DMA_bresp,
+      arvalid = blackbox.io.S_AXI_DMA_arvalid, arready = blackbox.io.S_AXI_DMA_arready, araddr = blackbox.io.S_AXI_DMA_araddr,
+      rvalid  = blackbox.io.S_AXI_DMA_rvalid,  rready  = blackbox.io.S_AXI_DMA_rready,  rdata  = blackbox.io.S_AXI_DMA_rdata, rresp = blackbox.io.S_AXI_DMA_rresp)
+
+    // -- control slave: AXI Ethernet MAC regs (with wstrb) -------------------
+    connectCtrl(ethCtrlAxiNode.in(0)._1,
+      awvalid = blackbox.io.S_AXI_ETH_awvalid, awready = blackbox.io.S_AXI_ETH_awready, awaddr = blackbox.io.S_AXI_ETH_awaddr,
+      wvalid  = blackbox.io.S_AXI_ETH_wvalid,  wready  = blackbox.io.S_AXI_ETH_wready,  wdata  = blackbox.io.S_AXI_ETH_wdata, wstrb = Some(blackbox.io.S_AXI_ETH_wstrb),
+      bvalid  = blackbox.io.S_AXI_ETH_bvalid,  bready  = blackbox.io.S_AXI_ETH_bready,  bresp  = blackbox.io.S_AXI_ETH_bresp,
+      arvalid = blackbox.io.S_AXI_ETH_arvalid, arready = blackbox.io.S_AXI_ETH_arready, araddr = blackbox.io.S_AXI_ETH_araddr,
+      rvalid  = blackbox.io.S_AXI_ETH_rvalid,  rready  = blackbox.io.S_AXI_ETH_rready,  rdata  = blackbox.io.S_AXI_ETH_rdata, rresp = blackbox.io.S_AXI_ETH_rresp)
+
+    // -- DMA memory master (ID-less; BD drives cache/prot/lock/qos) ----------
+    val (mm, _) = mm_axi_node.out(0)
+    blackbox.io.M_AXI_MM_awready := mm.aw.ready
+    mm.aw.valid      := blackbox.io.M_AXI_MM_awvalid
+    mm.aw.bits.id    := 0.U
+    mm.aw.bits.addr  := blackbox.io.M_AXI_MM_awaddr
+    mm.aw.bits.len   := blackbox.io.M_AXI_MM_awlen
+    mm.aw.bits.size  := blackbox.io.M_AXI_MM_awsize
+    mm.aw.bits.burst := blackbox.io.M_AXI_MM_awburst
+    mm.aw.bits.lock  := blackbox.io.M_AXI_MM_awlock
+    mm.aw.bits.cache := blackbox.io.M_AXI_MM_awcache
+    mm.aw.bits.prot  := blackbox.io.M_AXI_MM_awprot
+    mm.aw.bits.qos   := blackbox.io.M_AXI_MM_awqos
+    mm.aw.bits.user  := DontCare
+    mm.aw.bits.echo  := DontCare
+
+    mm.w.valid      := blackbox.io.M_AXI_MM_wvalid
+    blackbox.io.M_AXI_MM_wready := mm.w.ready
+    mm.w.bits.data  := blackbox.io.M_AXI_MM_wdata
+    mm.w.bits.strb  := blackbox.io.M_AXI_MM_wstrb
+    mm.w.bits.last  := blackbox.io.M_AXI_MM_wlast
+    mm.w.bits.user  := DontCare
+
+    blackbox.io.M_AXI_MM_bvalid := mm.b.valid
+    mm.b.ready      := blackbox.io.M_AXI_MM_bready
+    blackbox.io.M_AXI_MM_bresp  := mm.b.bits.resp
+
+    blackbox.io.M_AXI_MM_arready := mm.ar.ready
+    mm.ar.valid      := blackbox.io.M_AXI_MM_arvalid
+    mm.ar.bits.id    := 0.U
+    mm.ar.bits.addr  := blackbox.io.M_AXI_MM_araddr
+    mm.ar.bits.len   := blackbox.io.M_AXI_MM_arlen
+    mm.ar.bits.size  := blackbox.io.M_AXI_MM_arsize
+    mm.ar.bits.burst := blackbox.io.M_AXI_MM_arburst
+    mm.ar.bits.lock  := blackbox.io.M_AXI_MM_arlock
+    mm.ar.bits.cache := blackbox.io.M_AXI_MM_arcache
+    mm.ar.bits.prot  := blackbox.io.M_AXI_MM_arprot
+    mm.ar.bits.qos   := blackbox.io.M_AXI_MM_arqos
+    mm.ar.bits.user  := DontCare
+    mm.ar.bits.echo  := DontCare
+
+    blackbox.io.M_AXI_MM_rvalid := mm.r.valid
+    mm.r.ready      := blackbox.io.M_AXI_MM_rready
+    blackbox.io.M_AXI_MM_rdata  := mm.r.bits.data
+    blackbox.io.M_AXI_MM_rresp  := mm.r.bits.resp
+    blackbox.io.M_AXI_MM_rlast  := mm.r.bits.last
+
+    // -- interrupts to PLIC ---------------------------------------------------
+    val (ints, _) = int_node.out(0)
+    ints(0) := blackbox.io.mm2s_introut
+    ints(1) := blackbox.io.s2mm_introut
+    val (macInts, _) = mac_int_node.out(0)
+    macInts(0) := blackbox.io.mac_irq
+  }
+
+  // Wire a diplomatic AXI4-Lite slave bundle to the flat BD-wrapper lite ports.
+  // TLToAXI4 round-trips the TL source through id+echo; the BD lite port carries
+  // neither, so we replay {id, echo} in Scala via small queues. Addresses are
+  // truncated to the BD port width (natural base-address stripping).
+  private def connectCtrl(
+    axi:     AXI4Bundle,
+    awvalid: Bool, awready: Bool, awaddr: UInt,
+    wvalid:  Bool, wready:  Bool, wdata:  UInt, wstrb: Option[UInt],
+    bvalid:  Bool, bready:  Bool, bresp:  UInt,
+    arvalid: Bool, arready: Bool, araddr: UInt,
+    rvalid:  Bool, rready:  Bool, rdata:  UInt, rresp: UInt): Unit = {
+
+    val wq = Module(new Queue(new Bundle {
+      val id   = chiselTypeOf(axi.aw.bits.id)
+      val echo = chiselTypeOf(axi.aw.bits.echo)
+    }, 4))
+    awvalid             := axi.aw.valid && wq.io.enq.ready
+    axi.aw.ready        := awready && wq.io.enq.ready
+    awaddr              := axi.aw.bits.addr(awaddr.getWidth - 1, 0)
+    wq.io.enq.valid     := axi.aw.valid && awready
+    wq.io.enq.bits.id   := axi.aw.bits.id
+    wq.io.enq.bits.echo := axi.aw.bits.echo
+
+    wvalid      := axi.w.valid
+    axi.w.ready := wready
+    wdata       := axi.w.bits.data
+    wstrb.foreach { _ := axi.w.bits.strb }
+
+    axi.b.valid     := bvalid && wq.io.deq.valid
+    bready          := axi.b.ready && wq.io.deq.valid
+    wq.io.deq.ready := bvalid && axi.b.ready
+    axi.b.bits.resp := bresp
+    axi.b.bits.id   := wq.io.deq.bits.id
+    axi.b.bits.echo := wq.io.deq.bits.echo
+    axi.b.bits.user := DontCare
+
+    val rq = Module(new Queue(new Bundle {
+      val id   = chiselTypeOf(axi.ar.bits.id)
+      val echo = chiselTypeOf(axi.ar.bits.echo)
+    }, 4))
+    arvalid             := axi.ar.valid && rq.io.enq.ready
+    axi.ar.ready        := arready && rq.io.enq.ready
+    araddr              := axi.ar.bits.addr(araddr.getWidth - 1, 0)
+    rq.io.enq.valid     := axi.ar.valid && arready
+    rq.io.enq.bits.id   := axi.ar.bits.id
+    rq.io.enq.bits.echo := axi.ar.bits.echo
+
+    axi.r.valid     := rvalid && rq.io.deq.valid
+    rready          := axi.r.ready && rq.io.deq.valid
+    rq.io.deq.ready := rvalid && axi.r.ready
+    axi.r.bits.data := rdata
+    axi.r.bits.resp := rresp
+    axi.r.bits.id   := rq.io.deq.bits.id
+    axi.r.bits.echo := rq.io.deq.bits.echo
+    axi.r.bits.user := DontCare
+    axi.r.bits.last := true.B
+  }
+}

@@ -13,9 +13,10 @@ import sifive.blocks.devices.spi.{PeripherySPIKey, SPIParams}
 import sifive.blocks.devices.uart.{PeripheryUARTKey, UARTParams}
 
 import sifive.fpgashells.shell.{DesignKey}
-import sifive.fpgashells.shell.xilinx.{VCU118ShellPMOD, VCU118DDRSize}
+import sifive.fpgashells.shell.xilinx.{VCU118ShellPMOD, VCU118ShellSDLocation, VCU118DDRSize}
 
 import testchipip.serdes.{SerialTLKey}
+import testchipip.soc.{BankedScratchpadKey}
 
 import chipyard._
 import chipyard.harness._
@@ -24,6 +25,15 @@ class WithDefaultPeripherals extends Config((site, here, up) => {
   case PeripheryUARTKey => List(UARTParams(address = BigInt(0x64000000L)))
   case PeripherySPIKey => List(SPIParams(rAddress = BigInt(0x64001000L)))
   case VCU118ShellPMOD => "SDIO"
+})
+
+// Use FMC HPC1 (J2) connector for SD card via TB-FMCL-PH breakout board
+// Better signal integrity for higher SPI clock speeds (up to 25MHz)
+class WithFMCSDPeripherals extends Config((site, here, up) => {
+  case PeripheryUARTKey => List(UARTParams(address = BigInt(0x64000000L)))
+  case PeripherySPIKey => List(SPIParams(rAddress = BigInt(0x64001000L)))
+  case VCU118ShellSDLocation => "FMC"  // SD card on FMC instead of PMOD
+  case VCU118ShellPMOD => "JTAG"       // PMOD can be used for JTAG when SD is on FMC
 })
 
 class WithSystemModifications extends Config((site, here, up) => {
@@ -37,6 +47,13 @@ class WithSystemModifications extends Config((site, here, up) => {
   }
   case ExtMem => up(ExtMem, site).map(x => x.copy(master = x.master.copy(size = site(VCU118DDRSize)))) // set extmem to DDR size
   case SerialTLKey => Nil // remove serialized tl port
+})
+
+// Fix scratchpad address conflict with VCU118 DDR memory at 0x80000000
+class WithVCU118SafeScratchpad extends Config((site, here, up) => {
+  case BankedScratchpadKey => up(BankedScratchpadKey).map { params =>
+    params.copy(base = 0x70000000L) // Move scratchpad to safe address
+  }
 })
 
 // DOC include start: AbstractVCU118 and Rocket
@@ -53,17 +70,55 @@ class WithVCU118Tweaks extends Config(
   new WithJTAG ++
   // other configuration
   new WithDefaultPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++ // add SPI controller
   new chipyard.config.WithTLBackingMemory ++ // use TL backing memory
   new WithSystemModifications ++ // setup busses, use sdboot bootrom, setup ext. mem. size
+  new WithVCU118SafeScratchpad ++ // Fix scratchpad address conflict with DDR
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new freechips.rocketchip.subsystem.WithNMemoryChannels(1)
 )
 
 class RocketVCU118Config extends Config(
-  new WithVCU118Tweaks ++
+  new WithVCU118FMCSDTweaks ++
   new chipyard.RocketConfig
 )
 // DOC include end: AbstractVCU118 and Rocket
+
+// VCU118 with SD card on FMC HPC1 (J2) via TB-FMCL-PH breakout board
+// Use this config for better SD card signal integrity (higher SPI clock speeds)
+class WithVCU118FMCSDTweaks extends Config(
+  // clocking
+  new chipyard.harness.WithAllClocksFromHarnessClockInstantiator ++
+  new chipyard.clocking.WithPassthroughClockGenerator ++
+  new chipyard.config.WithUniformBusFrequencies(100) ++
+  new WithFPGAFrequency(100) ++ // default 100MHz freq
+  // harness binders
+  new WithUART ++
+  new WithSPISDCard ++
+  new WithDDRMem ++
+  new WithJTAG ++
+  // other configuration - use FMC for SD card
+  new WithFMCSDPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++ // add SPI controller
+  new chipyard.config.WithTLBackingMemory ++ // use TL backing memory
+  new WithSystemModifications ++ // setup busses, use sdboot bootrom, setup ext. mem. size
+  new WithVCU118SafeScratchpad ++ // Fix scratchpad address conflict with DDR
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new freechips.rocketchip.subsystem.WithNMemoryChannels(1)
+)
+
+// Rocket config with SD card on FMC connector (TB-FMCL-PH)
+class RocketVCU118FMCSDConfig extends Config(
+  new WithVCU118FMCSDTweaks ++
+  new chipyard.RocketConfig
+)
+
+
+// DOC RISC-V VELA 
+class WithVelaTestHarness extends Config((site, here, up) => {
+  case sifive.fpgashells.shell.DesignKey => (p: Parameters) => new VelaFPGATestHarness()(p)
+})
+
 
 class BoomVCU118Config extends Config(
   new WithFPGAFrequency(50) ++

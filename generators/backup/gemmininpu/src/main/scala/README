@@ -1,0 +1,30 @@
+< Just insert printf >
+AccumulatorMem.scala.bak  
+ExecuteController.scala.bak  
+LoadController.scala.bak  
+StoreController.scala.bak
+
+< Fix for FPGA >
+AccumulatorScale.scala.fpga
+Configs.scala.fpga
+GemminiConfigs.scala.fpga
+LoopConv.scala.fpga
+MpWontolic.scala.fpga
+Scratchpad.scala.fpga
+VectorScalarMultiplier.scala.fpga
+
+FPGAGemminiConfig.scala - fpga/src/main/scala/fmxcvu19p/
+
+< Original Code >
+AccumulatorScale.scala
+Configs.scala
+GemminiConfigs.scala
+LoopConv.scala
+MpWontolic.scala
+Scratchpad.scala
+VectorScalarMultiplier.scala
+
+
+< Folder >
+bak : gemmini -> gemmininpu
+fpga : Change Codes for FPGA

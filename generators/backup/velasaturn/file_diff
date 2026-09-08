@@ -1,0 +1,78 @@
+echo 'backend:' > diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/Backend.scala          ./backend/Backend.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/ExecuteSequencer.scala ./backend/ExecuteSequencer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/IssueQueue.scala       ./backend/IssueQueue.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/LoadSequencer.scala    ./backend/LoadSequencer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/PermuteSequencer.scala ./backend/PermuteSequencer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/PipeSequencer.scala    ./backend/PipeSequencer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/RegisterFile.scala     ./backend/RegisterFile.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/backend/StoreSequencer.scala   ./backend/StoreSequencer.scala >> diff_result.txt
+
+echo 'common:' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/Bundles.scala        ./common/Bundles.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/Compactor.scala      ./common/Compactor.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/Consts.scala         ./common/Consts.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/DCEQueue.scala       ./common/DCEQueue.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/Parameters.scala     ./common/Parameters.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/ReorderBuffer.scala  ./common/ReorderBuffer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/ReorderQueue         ./common/ReorderQueue >> diff_result.txt
+diff ../f-vela-main/Saturn/src/common/ShiftPacker.scala    ./common/ShiftPacker.scala >> diff_result.txt
+
+echo 'exu:' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/ExecutionUnit.scala   ./exu/ExecutionUnit.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/FunctionalUnit.scala  ./exu/FunctionalUnit.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/MaskUnit.scala        ./exu/MaskUnit.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/PermuteUnit.scala     ./exu/PermuteUnit.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/Rounding.scala        ./exu/Rounding.scala >> diff_result.txt
+
+echo 'fp :' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/fp/ElementwiseFPU.scal   ./exu/fp/ElementwiseFPU.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/fp/FPComp.scala          ./exu/fp/FPComp.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/fp/FPConv.scala          ./exu/fp/FPConv.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/fp/FPDiv.scala           ./exu/fp/FPDiv.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/fp/FPFMAPipe.scala       ./exu/fp/FPFMAPipe.scala  >> diff_result.txt 
+diff ../f-vela-main/Saturn/src/exu/fp/SharedFPFMA.scala     ./exu/fp/SharedFPFMA.scala  >> diff_result.txt 
+diff ../f-vela-main/Saturn/src/exu/fp/SharedFPMisc.scala    ./exu/fp/SharedFPMisc.scala >> diff_result.txt
+                           
+echo 'int :' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/int/BitwisePipe.scala              ./exu/int/BitwisePipe.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/int/ElementwiseMultiplyPipe.scala  ./exu/int/ElementwiseMultiplyPipe.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/int/IntegerDivide.scala            ./exu/int/IntegerDivide.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/int/IntegerPipe.scala              ./exu/int/IntegerPipe.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/int/SegmentedMultiplyPipe.scala    ./exu/int/SegmentedMultiplyPipe.scala   >> diff_result.txt
+diff ../f-vela-main/Saturn/src/exu/int/ShiftPipe.scala                ./exu/int/ShiftPipe.scala >> diff_result.txt
+
+echo 'frontend:' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/frontend/Dispatch.scala              ./frontend/Dispatch.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/frontend/EarlyDecode.scala           ./frontend/EarlyDecode.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/frontend/EarlyTrapCheck.scala        ./frontend/EarlyTrapCheck.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/frontend/HwachaLimiter.scala         ./frontend/HwachaLimiter.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/frontend/IterativeTrapCheck.scala    ./frontend/IterativeTrapCheck.scala >> diff_result.txt
+
+echo 'insns:' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/insns/Base.scala           ./insns/Base.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/insns/Control.scala        ./insns/Control.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/insns/Decode.scala         ./insns/Decode.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/insns/Instructions.scala   ./insns/Instructions.scala >> diff_result.txt
+                          
+echo 'mem:' >> diff_result.txt                      
+diff ../f-vela-main/Saturn/src/mem/AddrGen.scala            ./mem/AddrGen.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/LoadOrderBuffer.scala    ./mem/LoadOrderBuffer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/LoadSegmenter.scala      ./mem/LoadSegmenter.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/Mem.scala                ./mem/Mem.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/SegmentBuffer.scala      ./mem/SegmentBuffer.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/SGAddrGen.scala          ./mem/SGAddrGen.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/SGTLInterface.scala      ./mem/SGTLInterface.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/StoreSegmenter.scala     ./mem/StoreSegmenter.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/mem/TLInterface.scala        ./mem/TLInterface.scala >> diff_result.txt
+                              
+echo 'rocket:' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/rocket/Configs.scala          ./rocket/Configs.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/rocket/Frontend.scala         ./rocket/Frontend.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/rocket/HellaInterface.scala   ./rocket/HellaInterface.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/rocket/Integration.scala      ./rocket/Integration.scala >> diff_result.txt
+
+echo 'shuttle:' >> diff_result.txt
+diff ../f-vela-main/Saturn/src/shuttle/Configs.scala        ./shuttle/Configs.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/shuttle/Frontend.scala       ./shuttle/Frontend.scala >> diff_result.txt
+diff ../f-vela-main/Saturn/src/shuttle/Integration.scala    ./shuttle/Integration.scala >> diff_result.txt

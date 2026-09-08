@@ -1,0 +1,113 @@
+// Debug test: 4x4 WS matmul on DIM=16 hardware
+// A = sequential 0..15 in upper-left 4x4, B = 4x4 identity
+// Expected: C = A*B = A  (trivially verifiable)
+// Run on BOTH Verilator (VelaGemminiRocketConfig) and FPGA (VelaRocketHugeGemmini)
+// Compare [SW-*] lines in outputs to verify clocked-buffer correctness.
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#ifndef BAREMETAL
+#include <sys/mman.h>
+#endif
+#include "include/gemmini_testutils.h"
+
+#define MAT_ROWS 4
+#define MAT_COLS 4
+
+#define A_ADDR   0
+#define B_ADDR   DIM
+#define D_ADDR   (2*DIM)
+
+int main() {
+#ifndef BAREMETAL
+    if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+        perror("mlockall failed");
+        exit(1);
+    }
+#endif
+
+    // Full DIM×DIM arrays; only upper-left 4×4 carries test values, rest = 0
+    static elem_t  A[DIM][DIM] row_align(1);
+    static elem_t  B[DIM][DIM] row_align(1);
+    static elem_t  D[DIM][DIM] row_align(1);
+    static elem_t  C[DIM][DIM] row_align(1);
+    static elem_t  gold[DIM][DIM];
+
+    // Zero all arrays
+    for (int i = 0; i < DIM; i++)
+        for (int j = 0; j < DIM; j++) {
+            A[i][j] = 0; B[i][j] = 0; D[i][j] = 0; C[i][j] = 0;
+        }
+
+    // A upper-left 4×4: sequential values 0..15
+    for (int i = 0; i < MAT_ROWS; i++)
+        for (int j = 0; j < MAT_COLS; j++)
+            A[i][j] = (elem_t)(i * MAT_COLS + j);
+
+    // B upper-left 4×4: identity matrix  -> C = A*B = A
+    for (int i = 0; i < MAT_ROWS; i++)
+        B[i][i] = 1;
+
+    // D stays all zeros (no bias)
+
+    printf("[SW-INPUT-A]\n");
+    printMatrix(A);
+    printf("[SW-INPUT-B]\n");
+    printMatrix(B);
+
+    // Accumulator destination address (bit ADDR_LEN-1 set = accumulator space)
+    uint32_t C_acc = (1 << (ADDR_LEN - 1));
+
+    // --- Hardware setup ---
+    gemmini_flush(0);
+    gemmini_config_ld(DIM * sizeof(elem_t));
+    gemmini_config_ex(WEIGHT_STATIONARY, NO_ACTIVATION, 0);
+    gemmini_extended_config_st(DIM * sizeof(elem_t), NO_ACTIVATION, ACC_SCALE_IDENTITY);
+
+    // DP1: load only the 4x4 data rows into scratchpad
+    gemmini_extended_mvin(A, A_ADDR, MAT_COLS, MAT_ROWS);
+    gemmini_extended_mvin(B, B_ADDR, MAT_COLS, MAT_ROWS);
+    gemmini_extended_mvin(D, D_ADDR, MAT_COLS, MAT_ROWS);
+    gemmini_fence();
+
+    // DP2: WS preload weights (B) then compute C_acc = D + A*B
+    // gemmini_extended_preload(BD, C, BD_cols, BD_rows, C_cols, C_rows)
+    gemmini_extended_preload(B_ADDR, C_acc, MAT_COLS, MAT_ROWS, MAT_COLS, MAT_ROWS);
+    // gemmini_extended_compute_preloaded(A, BD, A_cols, A_rows, BD_cols, BD_rows)
+    gemmini_extended_compute_preloaded(A_ADDR, D_ADDR, MAT_COLS, MAT_ROWS, MAT_COLS, MAT_ROWS);
+    gemmini_fence();
+
+    // DP4: read back 4x4 result from accumulator to DRAM
+    gemmini_extended_mvout(C, C_acc, MAT_COLS, MAT_ROWS);
+    gemmini_fence();
+
+    // --- CPU golden reference ---
+    // D=0, B=identity -> gold = D + A*B = A (values 0-15, no elem_t overflow)
+    matmul(A, B, D, gold);
+
+    printf("[SW-GOLDEN]\n");
+    printMatrix(gold);
+    printf("[SW-RESULT]\n");
+    printMatrix(C);
+
+    // Compare the 4×4 block only
+    int pass = 1;
+    for (int i = 0; i < MAT_ROWS; i++) {
+        for (int j = 0; j < MAT_COLS; j++) {
+            if (C[i][j] != gold[i][j]) {
+                printf("[SW-DIFF] C[%d][%d] got=%d expected=%d\n",
+                       i, j, (int)C[i][j], (int)gold[i][j]);
+                pass = 0;
+            }
+        }
+    }
+
+    if (pass)
+        printf("[SW-PASS] debug_matmul_ws_4x4 PASSED\n");
+    else
+        printf("[SW-FAIL] debug_matmul_ws_4x4 FAILED\n");
+
+    exit(pass ? 0 : 1);
+}

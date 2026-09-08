@@ -1,0 +1,84 @@
+/*
+ * vela-axi-eth.dtsi
+ *
+ * Device-tree overlay for the Xilinx AXI 1G/2.5G Ethernet Subsystem + AXI DMA
+ * peripheral (riscvvela.VelaAxiEth), binding the mainline Linux drivers:
+ *   - drivers/net/ethernet/xilinx/xilinx_axienet_main.c  ("xlnx,axi-ethernet-1.00.a")
+ *   - drivers/dma/xilinx/xilinx_dma.c                    ("xlnx,axi-dma-1.00.a")
+ *
+ * Chipyard's diplomacy ALREADY auto-emits the base nodes in the generated .dts:
+ *
+ *     dma@64100000 {
+ *         compatible = "xlnx,axi-dma-1.00.a";
+ *         interrupt-parent = <&L16>;      // PLIC
+ *         interrupts = <3 4 5>;           // [mm2s, s2mm, mac]
+ *         reg = <0x64100000 0x10000>;
+ *     };
+ *     ethernet@64200000 {
+ *         compatible = "xlnx,axi-ethernet-1.00.a";
+ *         reg = <0x64200000 0x40000>;
+ *     };
+ *
+ * This overlay RE-OPENS those two node paths to ADD the driver-specific glue
+ * that diplomacy cannot emit (AXIS phandle links, #dma-cells, per-channel dma
+ * subnodes, phy/mdio subtree). Merge it into the generated .dts, or paste these
+ * property additions directly into the two nodes above.
+ *
+ * NOTE: values below reflect an actual generated .dts for VelaAxiEthTestVCU118.
+ *   Re-verify the interrupt numbers and PLIC after any config change:
+ *     grep -A4 'xlnx,axi-dma' <generated>.dts
+ *   IntSourceNode order is [mm2s, s2mm, mac] -> lines 3, 4, 5 here.
+ */
+
+/ {
+	soc {
+		/* Re-open the auto-emitted DMA node; add a stable label + SG/channel info.
+		 * interrupt-parent (&L16 = PLIC) is inherited from the existing node. */
+		axi_dma_eth: dma@64100000 {
+			#dma-cells = <1>;
+			xlnx,addrwidth = /bits/ 8 <38>;   /* == VelaAxiEthParams.mmAddrBits */
+			xlnx,include-sg;
+
+			dma-channel@64100000 {            /* MM2S / TX */
+				compatible = "xlnx,axi-dma-mm2s-channel";
+				dma-channels = <0x1>;
+				interrupts = <3>;             /* mm2s_introut */
+				xlnx,datawidth = <0x40>;      /* 64-bit stream */
+				xlnx,device-id = <0x0>;
+			};
+			dma-channel@64100030 {            /* S2MM / RX */
+				compatible = "xlnx,axi-dma-s2mm-channel";
+				dma-channels = <0x1>;
+				interrupts = <4>;             /* s2mm_introut */
+				xlnx,datawidth = <0x40>;
+				xlnx,device-id = <0x0>;
+			};
+		};
+
+		/* Re-open the auto-emitted Ethernet node; add AXIS links + PHY subtree. */
+		axi_ethernet_eth: ethernet@64200000 {
+			/* MAC interrupt is line 5 on the PLIC (referenced by stable path). */
+			interrupt-parent = <&{/soc/interrupt-controller@c000000}>;
+			interrupts = <5>;
+
+			axistream-connected = <&axi_dma_eth>;
+			axistream-control-connected = <&axi_dma_eth>;
+
+			phy-mode = "sgmii";
+			xlnx,phy-type = <0x4>;            /* 4 = SGMII */
+			xlnx,rxcsum = <0x0>;
+			xlnx,txcsum = <0x0>;
+			xlnx,rxmem = <0x1000>;
+			local-mac-address = [00 0a 35 07 0e 00];  /* override per board */
+
+			phy-handle = <&phy0>;
+			mdio {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				phy0: phy@1 {                 /* set to your RJ45 PHY MDIO addr */
+					reg = <1>;
+				};
+			};
+		};
+	};
+};

@@ -1,0 +1,25 @@
+package chipyard.fpga.vcu118
+
+import org.chipsalliance.cde.config.Config
+
+import freechips.rocketchip.subsystem.{WithoutTLMonitors, WithNMemoryChannels, WithInclusiveCache, WithCoherentBusTopology}
+
+import velaEth.WithVelaAxiEthRtl
+
+// =============================================================================
+// PLAN 3 (no block design): AXI Ethernet Subsystem + AXI DMA, hand-wired in RTL,
+// DMA's 3 masters merged in the TileLink fabric. Coexists with the plan-1 BD
+// config (VelaAxiEthTestVCU118) -- separate peripheral, same RJ45 pins/driver.
+// =============================================================================
+
+class VelaAxiEthRtlTestVCU118 extends Config(
+  new WithFPGAFrequency(100) ++
+  new WithVelaTestHarness ++                         // VelaFPGATestHarness (physical pins)
+  new WithVCU118AxiEthTweaks ++                      // same tweak chain as plan 1 (no IceNIC)
+  new WithEthernetPins ++                            // reuse SGMII/RJ45 HarnessBinder
+  new chipyard.iobinders.WithVelaAxiEthRtlAdapter ++ // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEthRtl() ++                         // instantiate the no-BD AXI-Ethernet+DMA peripheral
+  new WithInclusiveCache(nWays = 8, capacityKB = 512) ++
+  new WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)

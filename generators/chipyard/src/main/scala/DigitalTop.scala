@@ -30,6 +30,8 @@ class DigitalTop(implicit p: Parameters) extends ChipyardSystem
   with sifive.blocks.devices.spi.HasPeripherySPIFlash // Enables optionally adding the sifive SPI flash controller
   with sifive.blocks.devices.spi.HasPeripherySPI // Enables optionally adding the sifive SPI port
   with icenet.CanHavePeripheryIceNIC // Enables optionally adding the IceNIC for FireSim
+  with velaEth.CanHavePeripheryVelaAxiEth // Enables optionally adding Xilinx AXI-Ethernet + AXI-DMA NIC (real-board FPGA)
+  with velaEth.CanHavePeripheryVelaAxiEthRtl // Plan 3: same NIC without a block design (TL-fabric merge)
   with chipyard.example.CanHavePeripheryInitZero // Enables optionally adding the initzero example widget
   with chipyard.example.CanHavePeripheryGCD // Enables optionally adding the GCD example widget
   with chipyard.example.CanHavePeripheryStreamingFIR // Enables optionally adding the DSPTools FIR example widget

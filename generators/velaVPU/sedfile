@@ -1,0 +1,138 @@
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/bak
+mkdir -p /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/ExecuteSequencer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/ExecuteSequencer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/Backend.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/Backend.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/RegisterFile.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/RegisterFile.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/IssueQueue.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/IssueQueue.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/StoreSequencer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/StoreSequencer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/CustomSequencer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/CustomSequencer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/LoadSequencer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/LoadSequencer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/PipeSequencer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/PipeSequencer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/PermuteSequencer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/PermuteSequencer.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/backend/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/ReorderBuffer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/Bundles.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/Bundles.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/Parameters.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/Parameters.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/PipeScheduler.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/DCEQueue.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/Compactor.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/ShiftPacker.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/FloatCasts.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/Consts.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/common/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/CustomExecutionUnit.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/CustomExecutionUnit.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/ExecutionUnit.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/ExecutionUnit.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/SegmentedMultiplyPipe.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/SegmentedMultiplyPipe.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/BitwisePipe.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/BitwisePipe.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/IntegerPipe.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/IntegerPipe.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/ElementwiseMultiplyPipe.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/ElementwiseMultiplyPipe.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/ShiftPipe.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/ShiftPipe.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/IntegerDivide.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/int/IntegerDivide.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/PermuteUnit.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/PermuteUnit.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/FunctionalUnit.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/FunctionalUnit.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/MaskUnit.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/MaskUnit.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPComp.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPComp.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPConv.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPConv.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPFMAPipe.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPFMAPipe.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPDiv.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/FPDiv.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/SharedFPFMA.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/SharedFPFMA.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/SharedFPMisc.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/SharedFPMisc.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/ElementwiseFPU.scala
+sed -i.bak 's/package saturn/package velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/ElementwiseFPU.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/fp/RecFNToINDynamic.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/Rounding.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/exu/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/Dispatch.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/Dispatch.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/HwachaLimiter.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/HwachaLimiter.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/EarlyDecode.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/EarlyTrapCheck.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/EarlyTrapCheck.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/EarlyDecode.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/IterativeTrapCheck.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/IterativeTrapCheck.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/frontend/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/Decode.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/Instructions.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/Instructions.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/Control.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/Base.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/insns/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/SGTLInterface.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/SGTLInterface.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/SegmentBuffer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/SegmentBuffer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/StoreSegmenter.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/StoreSegmenter.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/SGAddrGen.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/SGAddrGen.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/Mem.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/Mem.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/TLInterface.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/TLInterface.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/LoadOrderBuffer.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/LoadOrderBuffer.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/AddrGen.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/AddrGen.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/LoadSegmenter.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/LoadSegmenter.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/mem/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/Integration.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/Integration.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/HellaInterface.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/HellaInterface.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/Frontend.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/Frontend.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/Configs.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/Configs.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/rocket/bak
+
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/Integration.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/Integration.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/Frontend.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/Frontend.scala
+sed -i.bak 's/package saturn/package velaVPU/g' /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/Configs.scala
+sed -i.bak 's/import saturn/import velaVPU/g'   /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/Configs.scala
+mv /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/*.bak /home/hjkwon/chipyard/generators/velaVPU/src/main/scala/shuttle/bak

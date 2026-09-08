@@ -1,0 +1,1955 @@
+<=======AccumulatorMem.scala=======>
+<=======AccumulatorScale.scala=======>
+87,157d86
+< // class AccScalePipe[T <: Data, U <: Data](
+< //   t: T,
+< //   rDataType: Vec[Vec[T]],
+< //   scale_func: (T, U) => T,
+< //   scale_t: U,
+< //   latency: Int,
+< //   has_nonlinear_activations: Boolean,
+< //   has_normalizations: Boolean
+< // )(implicit ev: Arithmetic[T]) extends Module {
+< //   import ev._
+< //   val io = IO(new Bundle {
+< //     val in  = Input(Valid(new AccScaleDataWithIndex(t, scale_t)(ev)))
+< //     val out = Output(Valid(new AccScaleDataWithIndex(t, scale_t)(ev)))
+< //   })
+< 
+< //   // S1: activation + scale 선택
+< //   val s1w = Wire(Valid(new AccScaleDataWithIndex(t, scale_t)(ev)))
+< //   s1w.valid := io.in.valid
+< //   s1w.bits  := io.in.bits
+< 
+< //   val act = io.in.bits.act
+< //   assert(has_normalizations.B || (!io.in.valid) ||
+< //     (act =/= Activation.LAYERNORM && act =/= Activation.SOFTMAX && act =/= Activation.IGELU))
+< 
+< //   val e0 = io.in.bits.data
+< //   val e_act = MuxCase(e0, Seq(
+< //     (has_nonlinear_activations.B && act === Activation.RELU)      -> e0.relu,
+< //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.LAYERNORM) ->
+< //       (e0 - io.in.bits.mean),
+< //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.IGELU) ->
+< //       AccumulatorScale.igelu(e0, io.in.bits.igelu_qb, io.in.bits.igelu_qc),
+< //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.SOFTMAX) ->
+< //       AccumulatorScale.iexp(e0 - io.in.bits.max, io.in.bits.iexp_qln2, io.in.bits.iexp_qln2_inv, io.in.bits.igelu_qb, io.in.bits.igelu_qc)
+< //   ))
+< 
+< //   val scale_sel = MuxCase(io.in.bits.scale, Seq(
+< //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.LAYERNORM) -> io.in.bits.inv_stddev,
+< //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.SOFTMAX)   -> io.in.bits.inv_sum_exp.asTypeOf(scale_t)
+< //   )).asTypeOf(scale_t)
+< 
+< //   s1w.bits.data  := e_act
+< //   s1w.bits.scale := scale_sel
+< //   val s1 = Pipe(s1w, 1)  // 1단
+< 
+< //   // S2a: 곱의 피연산자 레지스터
+< //   val s2aw = Wire(Valid(new AccScaleDataWithIndex(t, scale_t)(ev)))
+< //   s2aw.valid := s1.valid
+< //   s2aw.bits  := s1.bits
+< //   val s2a = Pipe(s2aw, 1) // 1단
+< 
+< //   // S3: 스케일 곱/라운딩 결과를 바로 레지스터에
+< //   val e_scaled = scale_func(s2a.bits.data, s2a.bits.scale)
+< //   val s3w = Wire(Valid(new AccScaleDataWithIndex(t, scale_t)(ev)))
+< //   s3w.valid := s2a.valid
+< //   s3w.bits  := s2a.bits
+< //   s3w.bits.data := e_scaled
+< //   val s3 = Pipe(s3w, 1) // 1단
+< 
+< //   // S4: clip만 별도
+< //   val e_clipped = s3.bits.data.clippedToWidthOf(rDataType.head.head)
+< //   val s4w = Wire(Valid(new AccScaleDataWithIndex(t, scale_t)(ev)))
+< //   s4w.valid := s3.valid
+< //   s4w.bits  := s3.bits
+< //   s4w.bits.data := e_clipped
+< //   val s4 = Pipe(s4w, 1) // 1단
+< 
+< //   // 정렬용 추가 latency
+< //   io.out := Pipe(s4, latency)
+< // }
+< 
+< 
+187,271c116,132
+<     // val activated_data = VecInit(data.map(v => VecInit(v.map { e =>
+<     //   val e_act = MuxCase(e, Seq(
+<     //     (has_nonlinear_activations.B && act === Activation.RELU) -> e.relu,
+<     //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.LAYERNORM) ->
+<     //       (e - io.in.bits.mean),
+<     //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.IGELU) ->
+<     //       AccumulatorScale.igelu(e, igelu_qb, igelu_qc),
+<     //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.SOFTMAX) ->
+<     //       AccumulatorScale.iexp(e - io.in.bits.max, iexp_qln2, iexp_qln2_inv, igelu_qb, igelu_qc),
+<     //   ))
+< 
+<     //   val e_scaled = scale_func(e_act, MuxCase(scale, Seq(
+<     //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.LAYERNORM) ->
+<     //       io.in.bits.inv_stddev,
+<     //     (has_nonlinear_activations.B && has_normalizations.B && act === Activation.SOFTMAX) ->
+<     //       io.in.bits.inv_sum_exp.asTypeOf(scale_t)
+<     //   )).asTypeOf(scale_t))
+< 
+<     //   val e_clipped = e_scaled.clippedToWidthOf(rDataType.head.head)
+< 
+<     //   e_clipped
+<     // })))
+< 
+<     // val in = Wire(Decoupled(new AccumulatorReadRespWithFullData(fullDataType, scale_t)(ev)))
+<     // in.valid := io.in.valid
+<     // io.in.ready := in.ready
+<     // in.bits.resp := io.in.bits.acc_read_resp
+<     // in.bits.full_data := acc_read_data
+<     // in.bits.resp.data := activated_data
+< 
+<     // val pipe_out = Pipeline(in, latency)
+< 
+<     // out.valid := pipe_out.valid
+<     // pipe_out.ready := out.ready
+<     // out.bits.full_data := pipe_out.bits.full_data
+<     // out.bits.data      := pipe_out.bits.resp.data
+<     // out.bits.fromDMA   := pipe_out.bits.resp.fromDMA
+<     // out.bits.acc_bank_id := pipe_out.bits.resp.acc_bank_id
+<     
+<     // S0: 그대로
+<     val s0 = Pipeline(io.in, 1) // s0: Decoupled[NormalizedOutput]
+< 
+<     // S1/S1'에서 사용할 로컬 payload: resp + full_data + inv_* 를 함께 운반
+<     class ActStagePayload[T2 <: Data : Arithmetic, U2 <: Data](fullDataType2: Vec[Vec[T2]], scale_t2: U2) extends Bundle {
+<       val resp       = new AccumulatorReadResp(fullDataType2, scale_t2) // data/act/scale/igelu/iexp 등 포함
+<       val full_data  = fullDataType2.cloneType                           // 원본 full 데이터 유지
+<       val inv_stddev = scale_t2.cloneType
+<       val inv_sum_exp= scale_t2.cloneType
+<     }
+< 
+<     // ---------- S1: activation만 적용 ----------
+<     val s1 = Wire(Decoupled(new ActStagePayload(fullDataType, scale_t)(ev)))
+<     s1.valid := s0.valid
+<     s0.ready := s1.ready
+< 
+<     val s0_resp         = s0.bits.acc_read_resp
+<     val s0_data         = s0_resp.data
+<     val s0_act          = s0_resp.act
+<     val s0_igelu_qb     = s0_resp.igelu_qb
+<     val s0_igelu_qc     = s0_resp.igelu_qc
+<     val s0_iexp_qln2    = s0_resp.iexp_qln2
+<     val s0_iexp_qln2inv = s0_resp.iexp_qln2_inv
+<     val s0_mean         = s0.bits.mean
+<     val s0_max          = s0.bits.max
+< 
+<     val activated_data = VecInit(s0_data.map { row =>
+<       VecInit(row.map { e =>
+<         MuxCase(e, Seq(
+<           (has_nonlinear_activations.B && s0_act === Activation.RELU) ->
+<             e.relu,
+<           (has_nonlinear_activations.B && has_normalizations.B && s0_act === Activation.LAYERNORM) ->
+<             (e - s0_mean),
+<           (has_nonlinear_activations.B && has_normalizations.B && s0_act === Activation.IGELU) ->
+<             AccumulatorScale.igelu(e, s0_igelu_qb, s0_igelu_qc),
+<           (has_nonlinear_activations.B && has_normalizations.B && s0_act === Activation.SOFTMAX) ->
+<             AccumulatorScale.iexp(e - s0_max, s0_iexp_qln2, s0_iexp_qln2inv, s0_igelu_qb, s0_igelu_qc)
+<         ))
+<       })
+<     })
+< 
+<     s1.bits.resp       := s0_resp
+<     s1.bits.resp.data  := activated_data         // 활성화 결과로 교체
+<     s1.bits.full_data  := s0_resp.data           // 원본 full-data 유지
+<     s1.bits.inv_stddev := s0.bits.inv_stddev.asTypeOf(scale_t)
+<     s1.bits.inv_sum_exp:= s0.bits.inv_sum_exp.asTypeOf(scale_t)
+---
+>     val activated_data = VecInit(data.map(v => VecInit(v.map { e =>
+>       val e_act = MuxCase(e, Seq(
+>         (has_nonlinear_activations.B && act === Activation.RELU) -> e.relu,
+>         (has_nonlinear_activations.B && has_normalizations.B && act === Activation.LAYERNORM) ->
+>           (e - io.in.bits.mean),
+>         (has_nonlinear_activations.B && has_normalizations.B && act === Activation.IGELU) ->
+>           AccumulatorScale.igelu(e, igelu_qb, igelu_qc),
+>         (has_nonlinear_activations.B && has_normalizations.B && act === Activation.SOFTMAX) ->
+>           AccumulatorScale.iexp(e - io.in.bits.max, iexp_qln2, iexp_qln2_inv, igelu_qb, igelu_qc),
+>       ))
+> 
+>       val e_scaled = scale_func(e_act, MuxCase(scale, Seq(
+>         (has_nonlinear_activations.B && has_normalizations.B && act === Activation.LAYERNORM) ->
+>           io.in.bits.inv_stddev,
+>         (has_nonlinear_activations.B && has_normalizations.B && act === Activation.SOFTMAX) ->
+>           io.in.bits.inv_sum_exp.asTypeOf(scale_t)
+>       )).asTypeOf(scale_t))
+273,274c134
+<     // ---------- S1' : activation→scale 사이 1단 더 ----------
+<     val s1p = Pipeline(s1, 1) // s1p: Decoupled[ActStagePayload]
+---
+>       val e_clipped = e_scaled.clippedToWidthOf(rDataType.head.head)
+276,279c136,137
+<     // ---------- S2: scale + clip ----------
+<     val in = Wire(Decoupled(new AccumulatorReadRespWithFullData(fullDataType, scale_t)(ev)))
+<     in.valid := s1p.valid
+<     s1p.ready := in.ready
+---
+>       e_clipped
+>     })))
+281,300c139,144
+<     val s1p_resp      = s1p.bits.resp
+<     val s1p_act       = s1p_resp.act
+<     val s1p_scale     = s1p_resp.scale.asTypeOf(scale_t)
+<     val s1p_invStd    = s1p.bits.inv_stddev
+<     val s1p_invSumExp = s1p.bits.inv_sum_exp
+< 
+<     val scaledClipped = VecInit(s1p_resp.data.map { row =>
+<       VecInit(row.map { e_act =>
+<         val scale_sel = MuxCase(s1p_scale, Seq(
+<           (has_nonlinear_activations.B && has_normalizations.B && s1p_act === Activation.LAYERNORM) -> s1p_invStd,
+<           (has_nonlinear_activations.B && has_normalizations.B && s1p_act === Activation.SOFTMAX)  -> s1p_invSumExp
+<         )).asTypeOf(scale_t)
+<         val e_scaled  = scale_func(e_act, scale_sel)
+<         e_scaled.clippedToWidthOf(rDataType.head.head)
+<       })
+<     })
+< 
+<     in.bits.resp       := s1p_resp
+<     in.bits.resp.data  := scaledClipped
+<     in.bits.full_data  := s1p.bits.full_data     // 원본 full-width 데이터 그대로 유지
+---
+>     val in = Wire(Decoupled(new AccumulatorReadRespWithFullData(fullDataType, scale_t)(ev)))
+>     in.valid := io.in.valid
+>     io.in.ready := in.ready
+>     in.bits.resp := io.in.bits.acc_read_resp
+>     in.bits.full_data := acc_read_data
+>     in.bits.resp.data := activated_data
+302d145
+<     // 기존 최종 파이프 유지
+307,309c150,152
+<     out.bits.full_data   := pipe_out.bits.full_data
+<     out.bits.data        := pipe_out.bits.resp.data
+<     out.bits.fromDMA     := pipe_out.bits.resp.fromDMA
+---
+>     out.bits.full_data := pipe_out.bits.full_data
+>     out.bits.data      := pipe_out.bits.resp.data
+>     out.bits.fromDMA   := pipe_out.bits.resp.fromDMA
+311d153
+< 
+<=======Activation.scala=======>
+<=======Arithmetic.scala=======>
+9d8
+< import freechips.rocketchip.tile._
+377,378c376,377
+<         val muladder = Module(new MulAddRecFNPipe(2, self.expWidth, self.sigWidth))
+<         muladder.io.validin := true.B
+---
+>         val muladder = Module(new MulAddRecFN(self.expWidth, self.sigWidth))
+> 
+<=======BeatMerger.scala=======>
+<=======Bufferadder.scala=======>
+<=======Buffervector.scala=======>
+<=======CmdFSM.scala=======>
+<=======ConfigsFP.scala=======>
+52d51
+<     weightType = Float(8, 24),
+<=======Configs.scala=======>
+24d23
+<     weightType = SInt(2.W),
+43c42
+<     acc_banks = 4,
+---
+>     acc_banks = 2,
+59c58
+<     ld_queue_length = 16,
+---
+>     ld_queue_length = 8,
+64c63
+<     max_in_flight_mem_reqs = 32,
+---
+>     max_in_flight_mem_reqs = 16,
+85c84
+<         val muladder = Module(new MulAddRecFN( f.expWidth, f.sigWidth))
+---
+>         val muladder = Module(new MulAddRecFN(f.expWidth, f.sigWidth))
+127,128c126
+<         val muladder = Module(new MulAddRecFN( f.expWidth, f.sigWidth))
+<         // muladder.io.validin := true.B
+---
+>         val muladder = Module(new MulAddRecFN(f.expWidth, f.sigWidth))
+170d167
+<     weightType = DummySInt(2),
+<=======Controller.scala=======>
+22d21
+<   val from_gemv_fsm = Bool()
+139d137
+<   raw_cmd_q.io.enq.bits.from_gemv_fsm := false.B
+157,165c155
+<   val (gemv_loop_cmd, gemv_loop_matmul_unroller_busy) = withClock (gated_clock) { GemvLoopMatmul(conv_cmd, reservation_station.io.gemv_ld_completed, reservation_station.io.gemv_st_completed, reservation_station.io.gemv_ex_completed,
+<     meshRows*tileRows, coreMaxAddrBits, reservation_station_entries, max_lds, max_exs, max_sts, sp_banks , sp_bank_entries, acc_banks, acc_bank_entries,
+<     inputType.getWidth, accType.getWidth, dma_maxbytes, new MvinRs2(mvin_rows_bits, mvin_cols_bits, local_addr_t),
+<     new PreloadRs(mvin_rows_bits, mvin_cols_bits, local_addr_t), new PreloadRs(mvout_rows_bits, mvout_cols_bits, local_addr_t),
+<     new ComputeRs(mvin_rows_bits, mvin_cols_bits, local_addr_t), new ComputeRs(mvin_rows_bits, mvin_cols_bits, local_addr_t),
+<     new MvoutRs2(mvout_rows_bits, mvout_cols_bits, local_addr_t)) }
+< 
+< 
+<   val (loop_cmd, loop_matmul_unroller_busy) = withClock (gated_clock) { LoopMatmul(gemv_loop_cmd, reservation_station.io.matmul_ld_completed, reservation_station.io.matmul_st_completed, reservation_station.io.matmul_ex_completed,
+---
+>   val (loop_cmd, loop_matmul_unroller_busy) = withClock (gated_clock) { LoopMatmul(conv_cmd, reservation_station.io.matmul_ld_completed, reservation_station.io.matmul_st_completed, reservation_station.io.matmul_ex_completed,
+268c258
+<   // val im2col = withClock (gated_clock) { Module(new Im2Col(outer.config)) }
+---
+>   val im2col = withClock (gated_clock) { Module(new Im2Col(outer.config)) }
+271c261
+<   // counters.io.event_io.collect(im2col.io.counter)
+---
+>   counters.io.event_io.collect(im2col.io.counter)
+273,274c263,264
+<   // im2col.io.req <> ex_controller.io.im2col.req
+<   // ex_controller.io.im2col.resp <> im2col.io.resp
+---
+>   im2col.io.req <> ex_controller.io.im2col.req
+>   ex_controller.io.im2col.resp <> im2col.io.resp
+277,278c267,268
+<   (ex_controller.io.srams.read, spad.module.io.srams.read).zipped.foreach { case (ex_read, spad_read) =>
+<     val req_arb = Module(new Arbiter(new ScratchpadReadReq(n=sp_bank_entries), 1))
+---
+>   (ex_controller.io.srams.read, im2col.io.sram_reads, spad.module.io.srams.read).zipped.foreach { case (ex_read, im2col_read, spad_read) =>
+>     val req_arb = Module(new Arbiter(new ScratchpadReadReq(n=sp_bank_entries), 2))
+281c271
+<     // req_arb.io.in(1) <> im2col_read.req
+---
+>     req_arb.io.in(1) <> im2col_read.req
+288c278
+<     // im2col_read.resp.valid := spad_read.resp.valid
+---
+>     im2col_read.resp.valid := spad_read.resp.valid
+291c281
+<     // im2col_read.resp.bits := spad_read.resp.bits
+---
+>     im2col_read.resp.bits := spad_read.resp.bits
+293c283
+<     spad_read.resp.ready := ex_read.resp.ready 
+---
+>     spad_read.resp.ready := ex_read.resp.ready || im2col_read.resp.ready
+340c330
+<   io.busy := raw_cmd.valid || loop_conv_unroller_busy || loop_matmul_unroller_busy || reservation_station.io.busy || spad.module.io.busy || unrolled_cmd.valid || loop_cmd.valid || conv_cmd.valid || gemv_loop_matmul_unroller_busy || gemv_loop_cmd.valid
+---
+>   io.busy := raw_cmd.valid || loop_conv_unroller_busy || loop_matmul_unroller_busy || reservation_station.io.busy || spad.module.io.busy || unrolled_cmd.valid || loop_cmd.valid || conv_cmd.valid
+441d430
+<  
+<=======CounterFile.scala=======>
+<=======CustomConfigs.scala=======>
+<=======CustomCPUConfigs.scala=======>
+<=======CustomSoCConfigs.scala=======>
+<=======Dataflow.scala=======>
+<=======DMACommandTracker.scala=======>
+<=======DMA.scala=======>
+<=======DSEConfigs.scala=======>
+43d42
+<     weightType = SInt(2.W),
+<=======ExecuteController.scala=======>
+0a1
+> 
+9a11
+> // TODO do we still need to flush when the dataflow is weight stationary? Won't the result just keep travelling through on its own?
+14c16
+<   
+---
+> 
+16c18
+<       val cmd = Flipped(Decoupled(new GemminiCmd(reservation_station_entries)))
+---
+>     val cmd = Flipped(Decoupled(new GemminiCmd(reservation_station_entries)))
+18,25c20,28
+<       val srams = new Bundle {
+<           val read = Vec(sp_banks, new ScratchpadReadIO(sp_bank_entries, sp_width))
+<           val write = Vec(sp_banks, new ScratchpadWriteIO(sp_bank_entries, sp_width, (sp_width / (aligned_to * 8)) max 1))
+<       }
+<       val acc = new Bundle {
+<           val read_req = Vec(acc_banks, Decoupled(new AccumulatorReadReq(
+<               acc_bank_entries, accType, acc_scale_t
+<           )))
+---
+>     val im2col = new Bundle {
+>       val req = Decoupled(new Im2ColReadReq(config))
+>       val resp = Flipped(Decoupled(new Im2ColReadResp(config)))
+>     }
+> 
+>     val srams = new Bundle {
+>       val read = Vec(sp_banks, new ScratchpadReadIO(sp_bank_entries, sp_width))
+>       val write = Vec(sp_banks, new ScratchpadWriteIO(sp_bank_entries, sp_width, (sp_width / (aligned_to * 8)) max 1))
+>     }
+27,30c30,38
+<           val read_resp = Flipped(Vec(acc_banks, Decoupled(new AccumulatorScaleResp(
+<               Vec(meshColumns, Vec(tileColumns, inputType)),
+<               Vec(meshColumns, Vec(tileColumns, accType))
+<           ))))
+---
+>     val acc = new Bundle {
+>       val read_req = Vec(acc_banks, Decoupled(new AccumulatorReadReq(
+>           acc_bank_entries, accType, acc_scale_t
+>       )))
+> 
+>       val read_resp = Flipped(Vec(acc_banks, Decoupled(new AccumulatorScaleResp(
+>         Vec(meshColumns, Vec(tileColumns, inputType)),
+>         Vec(meshColumns, Vec(tileColumns, accType))
+>       ))))
+32,35c40,42
+<           val write = Vec(acc_banks, Decoupled(new AccumulatorWriteReq(acc_bank_entries, Vec(meshColumns, Vec(tileColumns, accType)))))
+<       }
+<       val completed = Valid(UInt(log2Up(reservation_station_entries).W))
+<       val busy = Output(Bool())
+---
+>       // val write = Vec(acc_banks, new AccumulatorWriteIO(acc_bank_entries, Vec(meshColumns, Vec(tileColumns, accType))))
+>       val write = Vec(acc_banks, Decoupled(new AccumulatorWriteReq(acc_bank_entries, Vec(meshColumns, Vec(tileColumns, accType)))))
+>     }
+37c44,47
+<       val counter = new CounterEventIO()
+---
+>     val completed = Valid(UInt(log2Up(reservation_station_entries).W))
+>     val busy = Output(Bool())
+> 
+>     val counter = new CounterEventIO()
+40c50
+<   val block_size = meshRows*tileRows // = ma_length
+---
+>   val block_size = meshRows*tileRows
+42,43d51
+<   //TODO: Do we really need "val mesh_tag"?
+<   //we need it to identify each matmul's id
+55a64,65
+>   val unrolled_cmd = TransposePreloadUnroller(io.cmd, config, io.counter)
+> 
+57,58c67,69
+<   assert(ex_queue_length >= cmd_q_heads)  
+<   val (cmd, _) = MultiHeadedQueue(io.cmd, ex_queue_length, cmd_q_heads)
+---
+>   assert(ex_queue_length >= cmd_q_heads)
+>   // val (cmd, _) = MultiHeadedQueue(io.cmd, ex_queue_length, cmd_q_heads)
+>   val (cmd, _) = MultiHeadedQueue(unrolled_cmd, ex_queue_length, cmd_q_heads)
+64a76,78
+>   // Instruction-related variables
+>   val current_dataflow = if (dataflow == Dataflow.BOTH) Reg(UInt(1.W)) else dataflow.id.U
+> 
+69d82
+< 
+74,75c87,109
+<   val in_prop_flush = RegInit(false.B)
+<   in_prop_flush := false.B
+---
+>   val preload_cmd_place = Mux(DoPreloads(0), 0.U, 1.U)
+>   // val a_address_place = Mux(current_dataflow === Dataflow.WS.id.U, 0.U, Mux(preload_cmd_place === 0.U, 1.U, 2.U))
+> 
+>   val in_prop = functs(0) === COMPUTE_AND_FLIP_CMD
+> 
+>   val in_prop_flush = Reg(Bool())
+>   when (current_dataflow === Dataflow.WS.id.U) {
+>     in_prop_flush := false.B
+>   }
+> 
+>   val ocol = RegInit(0.U(8.W))
+>   val orow = RegInit(0.U(8.W))
+>   val krow = RegInit(0.U(4.W))
+>   val weight_stride = RegInit(0.U(3.W))
+>   val channel = RegInit(0.U(9.W))
+>   val row_turn = RegInit(0.U(11.W))
+>   val row_left = RegInit(0.U(4.W))
+>   val kdim2 = RegInit(0.U(8.W))
+>   val weight_double_bank = RegInit(false.B)
+>   val weight_triple_bank = RegInit(false.B)
+> 
+>   val icol = WireInit(0.U(9.W))
+>   val irow = WireInit(0.U(9.W))
+76a111,116
+>   icol := ((ocol - 1.U) * weight_stride + krow)//.asSInt
+>   irow := ((orow - 1.U) * weight_stride + krow)//.asSInt
+> 
+>   val im2col_turn = WireInit(0.U(9.W))
+> 
+>   val in_shift = Reg(UInt(log2Up(accType.getWidth).W))
+79c119,120
+<   val b_transpose = RegInit(false.B)
+---
+>   val a_transpose = Reg(Bool())
+>   val bd_transpose = Reg(Bool())
+82,83c123,127
+<   val bc_address_place = Mux(DoPreloads(0), 0.U, 1.U)
+<   val ad_address_place = Mux(DoPreloads(0), 1.U, 0.U)
+---
+>   val a_should_be_fed_into_transposer = Mux(current_dataflow === Dataflow.OS.id.U, !a_transpose, a_transpose)
+>   val a_address_place = Mux(preload_cmd_place === 0.U, 1.U, Mux(a_should_be_fed_into_transposer, 2.U, 0.U))
+> 
+>   val b_should_be_fed_into_transposer = current_dataflow === Dataflow.OS.id.U && bd_transpose
+>   val b_address_place = Mux(preload_cmd_place === 0.U, 1.U, Mux(b_should_be_fed_into_transposer, 2.U, 0.U))
+85,89c129
+< // SRAM addresses of matmul operands
+<   val a_address_rs1 = rs1s(ad_address_place).asTypeOf(local_addr_t)
+<   val b_address_rs1 = rs1s(bc_address_place).asTypeOf(local_addr_t)
+<   val d_address_rs2 = rs2s(ad_address_place).asTypeOf(local_addr_t)
+<   val c_address_rs2 = rs2s(bc_address_place).asTypeOf(local_addr_t)
+---
+>   val d_should_be_fed_into_transposer = current_dataflow === Dataflow.WS.id.U && bd_transpose
+91,92c131,147
+<   if (hardcode_d_to_garbage_addr) {
+<     d_address_rs2.make_this_garbage()
+---
+>   assert(!(config_initialized &&
+>     (a_should_be_fed_into_transposer +& b_should_be_fed_into_transposer +& d_should_be_fed_into_transposer) > 1.U),
+>     "Too many inputs are being fed into the single transposer we have")
+> 
+>   //fix by input
+>   val im2col_en = config.hasIm2Col.B && weight_stride =/= 0.U
+> 
+>   // SRAM addresses of matmul operands
+>   val a_address_rs1 = rs1s(a_address_place).asTypeOf(local_addr_t)
+>   val b_address_rs2 = rs2s(b_address_place).asTypeOf(local_addr_t)
+>   val d_address_rs1 = rs1s(preload_cmd_place).asTypeOf(local_addr_t)
+>   val c_address_rs2 = rs2s(preload_cmd_place).asTypeOf(local_addr_t)
+> 
+>   if (dataflow == Dataflow.OS && hardcode_d_to_garbage_addr) {
+>     d_address_rs1.make_this_garbage()
+>   } else if (dataflow == Dataflow.WS && hardcode_d_to_garbage_addr) {
+>     b_address_rs2.make_this_garbage()
+93a149
+> 
+95,96c151,152
+<   val accumulate_zeros = d_address_rs2.is_garbage()
+<   val preload_zeros = b_address_rs1.is_garbage()
+---
+>   val accumulate_zeros = b_address_rs2.is_garbage()
+>   val preload_zeros = d_address_rs1.is_garbage()
+98,108c154,168
+<   val a_cols = rs1s(ad_address_place)(32 + log2Up(block_size + 1) - 1, 32)
+<   val a_rows = rs1s(ad_address_place)(48 + log2Up(block_size + 1) - 1, 48)
+<   val b_cols_default = rs1s(bc_address_place)(32 + log2Up(block_size + 1) - 1, 32)
+<   val b_rows_default = rs1s(bc_address_place)(48 + log2Up(block_size + 1) - 1, 48)
+<   val b_cols = Mux(b_transpose, b_rows_default, b_cols_default)
+<   val b_rows = Mux(b_transpose, b_cols_default, b_rows_default)
+<   val d_cols = rs2s(ad_address_place)(32 + log2Up(block_size + 1) - 1, 32)
+<   val d_rows = rs2s(ad_address_place)(48 + log2Up(block_size + 1) - 1, 48)
+<   val c_cols = rs2s(bc_address_place)(32 + log2Up(block_size + 1) - 1, 32)
+<   val c_rows = rs2s(bc_address_place)(48 + log2Up(block_size + 1) - 1, 48)
+<   
+---
+>   val a_cols_default = rs1s(a_address_place)(32 + log2Up(block_size + 1) - 1, 32) // TODO magic numbers
+>   val a_rows_default = rs1s(a_address_place)(48 + log2Up(block_size + 1) - 1, 48) // TODO magic numbers
+>   val b_cols_default = rs2s(b_address_place)(32 + log2Up(block_size + 1) - 1, 32) // TODO magic numbers
+>   val b_rows_default = rs2s(b_address_place)(48 + log2Up(block_size + 1) - 1, 48) // TODO magic numbers
+>   val d_cols_default = rs1s(preload_cmd_place)(32 + log2Up(block_size + 1) - 1, 32) // TODO magic numbers
+>   val d_rows_default = rs1s(preload_cmd_place)(48 + log2Up(block_size + 1) - 1, 48) // TODO magic numbers
+> 
+>   val a_cols = Mux(a_transpose, a_rows_default, a_cols_default)
+>   val a_rows = Mux(a_transpose, a_cols_default, a_rows_default)
+>   val b_cols = Mux(current_dataflow === Dataflow.OS.id.U && bd_transpose, b_rows_default, b_cols_default)
+>   val b_rows = Mux(current_dataflow === Dataflow.OS.id.U && bd_transpose, b_cols_default, b_rows_default)
+>   val d_cols = Mux(current_dataflow === Dataflow.WS.id.U && bd_transpose, d_rows_default, d_cols_default)
+>   val d_rows = Mux(current_dataflow === Dataflow.WS.id.U && bd_transpose, d_cols_default, d_rows_default)
+>   val c_cols = rs2s(preload_cmd_place)(32 + log2Up(block_size + 1) - 1, 32) // TODO magic numbers
+>   val c_rows = rs2s(preload_cmd_place)(48 + log2Up(block_size + 1) - 1, 48) // TODO magic numbers
+125c185,186
+<   val wontolic = Module(new WontolicWithDelays(inputType, weightType, spatialArrayOutputType, accType, mesh_tag, dataflow, tree_reduction, tile_latency, mesh_output_delay,
+---
+>   // Instantiate the actual mesh
+>   val mesh = Module(new MeshWithDelays(inputType, spatialArrayOutputType, accType, mesh_tag, dataflow, tree_reduction, tile_latency, mesh_output_delay,
+128,147c189,209
+<   wontolic.io.a.valid := false.B
+<   wontolic.io.b.valid := false.B
+<   wontolic.io.d.valid := false.B
+<   wontolic.io.req.valid := control_state === flush
+< 
+<   wontolic.io.a.bits := DontCare
+<   wontolic.io.b.bits := DontCare
+<   wontolic.io.d.bits := DontCare
+<   wontolic.io.req.bits.tag := DontCare
+<   wontolic.io.req.bits.tag.cols := cntl.c_cols
+<   wontolic.io.req.bits.tag.rows := cntl.c_rows
+<   wontolic.io.req.bits.total_rows := block_size.U
+<   wontolic.io.req.bits.flush := Mux(control_state === flush && !cntl_valid, 1.U, 0.U) // We want to make sure that the mesh has absorbed all inputs before flushing
+<   wontolic.io.req.bits.tag.rob_id := cntl.rob_id
+<   wontolic.io.req.bits.in_prop := Mux(control_state === flush, in_prop_flush, cntl.prop)
+<   wontolic.io.req.bits.b_transpose := cntl.b_transpose
+<   wontolic.io.req.bits.in_acc := cntl.in_acc
+<   wontolic.io.req.bits.in_preload := cntl.in_preload
+<   wontolic.io.req.bits.is_mpgemm := cntl.is_mpgemm
+< //Hazards
+---
+>   mesh.io.a.valid := false.B
+>   mesh.io.b.valid := false.B
+>   mesh.io.d.valid := false.B
+>   mesh.io.req.valid := control_state === flush
+> 
+>   mesh.io.a.bits := DontCare
+>   mesh.io.b.bits := DontCare
+>   mesh.io.d.bits := DontCare
+>   mesh.io.req.bits.tag := DontCare
+>   mesh.io.req.bits.tag.cols := cntl.c_cols
+>   mesh.io.req.bits.tag.rows := cntl.c_rows
+>   mesh.io.req.bits.total_rows := block_size.U
+>   mesh.io.req.bits.pe_control.propagate := Mux(control_state === flush, in_prop_flush, cntl.prop)
+>   mesh.io.req.bits.pe_control.dataflow := cntl.dataflow
+>   mesh.io.req.bits.pe_control.shift := cntl.shift
+>   mesh.io.req.bits.a_transpose := cntl.a_transpose
+>   mesh.io.req.bits.bd_transpose := cntl.bd_transpose
+>   mesh.io.req.bits.tag.rob_id := cntl.rob_id
+>   mesh.io.req.bits.flush := Mux(control_state === flush && !cntl_valid, 1.U, 0.U) // We want to make sure that the mesh has absorbed all inputs before flushing
+> 
+>   // Hazards
+150c212
+<   val raw_hazard_pre = wontolic.io.tags_in_progress.map { t =>
+---
+>   val raw_hazard_pre = mesh.io.tags_in_progress.map { t =>
+158c220
+<   val raw_hazard_mulpre = wontolic.io.tags_in_progress.map { t =>
+---
+>   val raw_hazard_mulpre = mesh.io.tags_in_progress.map { t =>
+166,167c228
+<   // stall이 발생하면 세번째 명령어까지 받아서 처리
+<   val third_instruction_needed = !raw_hazards_are_impossible.B //ad_address_place > 1.U || bc_address_place > 1.U
+---
+>   val third_instruction_needed = a_address_place > 1.U || b_address_place > 1.U || preload_cmd_place > 1.U || !raw_hazards_are_impossible.B
+169c230
+<   val matmul_in_progress = wontolic.io.tags_in_progress.map(_.rob_id.valid).reduce(_ || _)
+---
+>   val matmul_in_progress = mesh.io.tags_in_progress.map(_.rob_id.valid).reduce(_ || _)
+173,175c234,238
+<   val a_fire_counter = RegInit(0.U(log2Up(block_size).W))
+<   val b_fire_counter = RegInit(0.U(log2Up(block_size).W))
+<   val d_fire_counter = RegInit(0.U(log2Up(block_size).W))
+---
+>   // SRAM scratchpad
+>   // Fire counters which resolve same-bank accesses
+>   val a_fire_counter = Reg(UInt(log2Up(block_size).W))
+>   val b_fire_counter = Reg(UInt(log2Up(block_size).W))
+>   val d_fire_counter = Reg(UInt(log2Up(block_size).W))
+178d240
+<   val b_fire_started = RegInit(false.B)
+179a242
+>   val b_fire_started = RegInit(false.B)
+180a244
+>   // "A" stride variables
+182c246,248
+<   val a_addr_stride = Reg(UInt(16.W))
+---
+>   val a_addr_stride = Reg(UInt(16.W)) // TODO magic numbers
+> 
+>   // "C" stride variables
+186,187c252,253
+<   val b_address = b_address_rs1 + b_fire_counter
+<   val d_address = d_address_rs2 + d_fire_counter
+---
+>   val b_address = b_address_rs2 + b_fire_counter
+>   val d_address = d_address_rs1 + (block_size.U - 1.U - d_fire_counter)
+198,199c264,265
+<   val b_read_from_acc = ex_read_from_acc.B && b_address_rs1.is_acc_addr
+<   val d_read_from_acc = ex_read_from_acc.B && d_address_rs2.is_acc_addr
+---
+>   val b_read_from_acc = ex_read_from_acc.B && b_address_rs2.is_acc_addr
+>   val d_read_from_acc = ex_read_from_acc.B && d_address_rs1.is_acc_addr
+207,208c273,274
+<   val b_garbage = b_address_rs1.is_garbage() || !start_inputting_b
+<   val d_garbage = d_address_rs2.is_garbage() || !start_inputting_d
+---
+>   val b_garbage = b_address_rs2.is_garbage() || !start_inputting_b
+>   val d_garbage = d_address_rs1.is_garbage() || !start_inputting_d
+209a276
+>   // TODO merge these into one enum
+213,214c280
+<   
+<   // TODO merge these into one enum
+---
+> 
+219,238c285
+<   val total_rows = WireInit(block_size.U)
+< 
+<   val in_acc = (rs1s(0)(rs1s(0).getWidth - 1)).asBool
+<   val in_prop = functs(0) === COMPUTE_AND_FLIP_CMD
+< 
+<   val is_mpgemm = rs2s(0)(rs2s(0).getWidth - 1).asBool
+< 
+<   val in_acc_buf = RegInit(false.B)
+<   val in_preload = RegInit(false.B)
+< 
+<   val cmd_pop_next = RegNext(cmd.pop =/= 0.U)
+<   when(cmd_pop_next && DoComputes(0)){
+<     in_acc_buf := in_acc
+<   }
+<   when(DoPreloads(0)){
+<     in_preload := true.B
+<   } .otherwise {
+<     in_preload := false.B
+<   }
+< 
+---
+>   val total_rows = WireInit(block_size.U) // The total number of rows of A, B, and D to feed into the mesh
+241c288,289
+<   when (b_garbage) {
+---
+>   when (current_dataflow === Dataflow.WS.id.U && d_garbage &&
+>     !a_should_be_fed_into_transposer && !b_should_be_fed_into_transposer && !d_should_be_fed_into_transposer) {
+246,247c294,295
+<       2 ROB instructions per cycle (one for the preload, and one for the compute). Therefore, to prevent ROB
+<       instructions from being lost, we set a minimum floor for total_rows of 2.
+---
+>        2 ROB instructions per cycle (one for the preload, and one for the compute). Therefore, to prevent ROB
+>        instructions from being lost, we set a minimum floor for total_rows of 2.
+249,254c297,300
+<       Furthermore, two writes to the same accumulator address must occur at least 4 cycles apart to allow the write to
+<       fully propagate through. Therefore, we raise the minimum floor for total_rows to 4.
+<       TODO: add a WAW check to the ROB so that we can lower the floor back to 2
+<     */
+< 
+<     //TODO: total row 제약이 Wontolic에서도 필요한지 고민해보기, 4가 아닌 2로도 해보기.
+---
+>        Furthermore, two writes to the same accumulator address must occur at least 4 cycles apart to allow the write to
+>        fully propagate through. Therefore, we raise the minimum floor for total_rows to 4.
+>        TODO: add a WAW check to the ROB so that we can lower the floor back to 2
+>      */
+258c304,307
+<   //mul_pre sync가 필요한지 생각해보기
+---
+>   //added for mul_pre sync
+>   val mul_pre_counter_sub = RegInit(0.U(3.W))
+>   val mul_pre_counter_count = RegInit(0.U(3.W))
+>   val mul_pre_counter_lock = RegInit(false.B)
+261d309
+<   // 실제 행렬의 유효 범위를 초과할 경우.
+264c312,314
+<   val d_row_is_not_all_zeros = d_fire_counter < d_rows
+---
+>   val d_row_is_not_all_zeros = block_size.U - 1.U - d_fire_counter < d_rows //Todo: d_fire_counter_mulpre?
+> 
+>   val im2col_wire = io.im2col.req.ready
+266,267c316
+<   // scratch pad 혹은 accumulator의 같은 뱅크에서 데이터를 가져오는 경우.
+<   def same_bank(addr1: LocalAddr, addr2: LocalAddr, is_garbage1: Bool, is_garbage2: Bool, start_inputting1: Bool, start_inputting2: Bool): Bool = {
+---
+>   def same_bank(addr1: LocalAddr, addr2: LocalAddr, is_garbage1: Bool, is_garbage2: Bool, start_inputting1: Bool, start_inputting2: Bool, can_be_im2colled: Boolean): Bool = {
+270d318
+<     val is_garbage = is_garbage1 || is_garbage2 || !start_inputting1 || !start_inputting2
+272,273c320,326
+<     !is_garbage && ((addr1_read_from_acc && addr2_read_from_acc) ||  
+<     (!addr1_read_from_acc && !addr2_read_from_acc && addr1.sp_bank() === addr2.sp_bank()))
+---
+>     val is_garbage = is_garbage1 || is_garbage2 ||
+>       !start_inputting1 || !start_inputting2
+> 
+>     val is_being_im2colled = can_be_im2colled.B && im2col_wire && im2col_en//im2col_wire
+> 
+>     !is_garbage && !is_being_im2colled && ((addr1_read_from_acc && addr2_read_from_acc) ||
+>       (!addr1_read_from_acc && !addr2_read_from_acc && addr1.sp_bank() === addr2.sp_bank()))
+280,281c333
+<   //Same bank일 때, 충돌 해결 로직(같은 뱅크에서 읽어오는 행위가 한사이클 차이만 난다면, stall -> 과연 필요한가?)
+<   case class Operand(addr: LocalAddr, is_garbage: Bool, start_inputting: Bool, counter: UInt, started: Bool, priority: Int) {
+---
+>   case class Operand(addr: LocalAddr, is_garbage: Bool, start_inputting: Bool, counter: UInt, started: Bool, can_be_im2colled: Boolean, priority: Int) {
+284,286c336,338
+<   val a_operand = Operand(a_address, a_address_rs1.is_garbage(), start_inputting_a, a_fire_counter, a_fire_started, 0)
+<   val b_operand = Operand(b_address, b_address_rs1.is_garbage(), start_inputting_b, b_fire_counter, b_fire_started, 1)
+<   val d_operand = Operand(d_address, d_address_rs2.is_garbage(), start_inputting_d, d_fire_counter, d_fire_started, 2)
+---
+>   val a_operand = Operand(a_address, a_address_rs1.is_garbage(), start_inputting_a, a_fire_counter, a_fire_started, true, 0)
+>   val b_operand = Operand(b_address, b_address_rs2.is_garbage(), start_inputting_b, b_fire_counter, b_fire_started, false, 1)
+>   val d_operand = Operand(d_address, d_address_rs1.is_garbage(), start_inputting_d, d_fire_counter, d_fire_started, false, 2)
+289c341
+<   val Seq(a_valid, b_valid, d_valid) = operands.map { case Operand(addr, is_garbage, start_inputting, counter, started, priority) =>
+---
+>   val Seq(a_valid, b_valid, d_valid) = operands.map { case Operand(addr, is_garbage, start_inputting, counter, started, can_be_im2colled, priority) =>
+292c344
+<     val same_banks = others.map(o => same_bank(addr, o.addr, is_garbage, o.is_garbage, start_inputting, o.start_inputting))
+---
+>     val same_banks = others.map(o => same_bank(addr, o.addr, is_garbage, o.is_garbage, start_inputting, o.start_inputting, can_be_im2colled || o.can_be_im2colled))
+307d358
+<   //a, b, d matrix 몇번째 줄까지 진행되었는지 추적하기 위한 로직
+337,338d387
+< /* 현재 코드에서는 저장해 놓은 mul_pre_counter_count가 사용되지 않고 있음
+<   //cntl_ready가 되지 않아 stall이 발생한다면 b_fire_counter+1 저장
+340c389
+<     mul_pre_counter_count := b_fire_counter //store 2
+---
+>     mul_pre_counter_count := d_fire_counter //store 2
+347c396,402
+< */
+---
+> 
+>   when(!io.im2col.resp.bits.im2col_delay && performing_mul_pre){
+>     mul_pre_counter_sub := Mux(mul_pre_counter_sub > 0.U,  mul_pre_counter_sub - 1.U, 0.U)
+>   }.elsewhen(io.im2col.resp.bits.im2col_delay){
+>     mul_pre_counter_sub := 2.U
+>   }.otherwise{mul_pre_counter_sub := 0.U}
+> 
+362,367c417,426
+< 
+<   // Scratchpad reads   
+<     for (i <- 0 until sp_banks) {
+<     val read_a = a_valid && !a_read_from_acc && dataAbank === i.U && start_inputting_a && !multiply_garbage && a_row_is_not_all_zeros
+<     val read_b = b_valid && !b_read_from_acc && dataBbank === i.U && start_inputting_b && !preload_zeros && b_row_is_not_all_zeros
+<     val read_d = d_valid && !d_read_from_acc && dataDbank === i.U && start_inputting_d && !accumulate_zeros && d_row_is_not_all_zeros
+---
+>   val d_fire_counter_mulpre = WireInit(b_fire_counter)
+>   when(performing_mul_pre && !io.im2col.resp.bits.im2col_delay&&im2col_en){
+>     d_fire_counter_mulpre := d_fire_counter - mul_pre_counter_sub
+>   }.otherwise{d_fire_counter_mulpre := d_fire_counter}
+> 
+>   // Scratchpad reads
+>   for (i <- 0 until sp_banks) {
+>     val read_a = a_valid && !a_read_from_acc && dataAbank === i.U && start_inputting_a && !multiply_garbage && a_row_is_not_all_zeros && !(im2col_wire&&im2col_en)
+>     val read_b = b_valid && !b_read_from_acc && dataBbank === i.U && start_inputting_b && !accumulate_zeros && b_row_is_not_all_zeros //&& !im2col_wire
+>     val read_d = d_valid && !d_read_from_acc && dataDbank === i.U && start_inputting_d && !preload_zeros && d_row_is_not_all_zeros //&& !im2col_wire
+379,380c438,439
+<         Seq(read_b -> (b_address_rs1.sp_row() + b_fire_counter),
+<           read_d -> (d_address_rs2.sp_row() + d_fire_counter)))
+---
+>         Seq(read_b -> (b_address_rs2.sp_row() + b_fire_counter),
+>           read_d -> (d_address_rs1.sp_row() + block_size.U - 1.U - d_fire_counter_mulpre)))
+381a441,446
+>       // TODO this just overrides the previous line. Should we erase the previous line?
+>       when(im2col_en === false.B) {
+>         io.srams.read(i).req.bits.addr := MuxCase(a_address.sp_row(),
+>           Seq(read_b -> b_address.sp_row(),
+>             read_d -> d_address.sp_row()))
+>       }
+393,395c458,460
+<     val read_a_from_acc = a_valid && a_read_from_acc && dataABankAcc === i.U && start_inputting_a && !multiply_garbage && a_row_is_not_all_zeros
+<     val read_b_from_acc = b_valid && b_read_from_acc && dataBBankAcc === i.U && start_inputting_b && !preload_zeros && b_row_is_not_all_zeros
+<     val read_d_from_acc = d_valid && d_read_from_acc && dataDBankAcc === i.U && start_inputting_d && !accumulate_zeros && d_row_is_not_all_zeros
+---
+>     val read_a_from_acc = a_valid && a_read_from_acc && dataABankAcc === i.U && start_inputting_a && !multiply_garbage && a_row_is_not_all_zeros && !(im2col_wire&&im2col_en)
+>     val read_b_from_acc = b_valid && b_read_from_acc && dataBBankAcc === i.U && start_inputting_b && !accumulate_zeros && b_row_is_not_all_zeros //&& !im2col_wire
+>     val read_d_from_acc = d_valid && d_read_from_acc && dataDBankAcc === i.U && start_inputting_d && !preload_zeros && d_row_is_not_all_zeros //&& !im2col_wire
+414,416c479,480
+<         Seq(read_b_from_acc -> (b_address_rs1.acc_row() + b_fire_counter),
+<           read_d_from_acc -> (d_address_rs2.acc_row() + d_fire_counter)))
+< 
+---
+>         Seq(read_b_from_acc -> (b_address_rs2.acc_row() + b_fire_counter),
+>           read_d_from_acc -> (d_address_rs1.acc_row() + block_size.U - 1.U - d_fire_counter)))
+417a482,487
+>       // TODO this just overrides the previous line. Should we erase the previous line?
+>       when(im2col_en === false.B){
+>         io.acc.read_req(i).bits.addr := MuxCase(a_address.acc_row(),
+>           Seq(read_b_from_acc -> b_address.acc_row(),
+>             read_d_from_acc -> d_address.acc_row()))
+>       }
+433a504,529
+>   // Im2Col reads
+>   {
+>     val read_a = a_valid && start_inputting_a && !multiply_garbage && im2col_wire&&im2col_en //or just im2col_wire
+> 
+>     when (read_a && !io.im2col.req.ready) {
+>       a_ready := false.B
+>     }
+> 
+>     io.im2col.req.valid := read_a
+>     io.im2col.req.bits.addr := a_address_rs1
+>     io.im2col.req.bits.icol := icol
+>     io.im2col.req.bits.irow := irow
+>     io.im2col.req.bits.ocol := ocol
+>     io.im2col.req.bits.stride := weight_stride
+>     io.im2col.req.bits.krow := krow
+>     io.im2col.req.bits.kdim2 := kdim2
+>     io.im2col.req.bits.row_turn := row_turn
+>     io.im2col.req.bits.row_left := row_left
+>     io.im2col.req.bits.channel := channel
+>     io.im2col.req.bits.im2col_cmd := im2col_en
+>     io.im2col.req.bits.start_inputting := start_inputting_a
+>     io.im2col.req.bits.weight_double_bank := weight_double_bank
+>     io.im2col.req.bits.weight_triple_bank := weight_triple_bank
+> 
+>     io.im2col.resp.ready := mesh.io.a.ready
+>   }
+458,459c554
+<               //WS에서는 기본적으로 shift 안쓰임(OS에서 값을 축적할 때, 정밀도 손실을 줄이기 위해 사용되는 것으로 추정)
+<               //in_shift := config_ex_rs2.in_shift
+---
+>               in_shift := config_ex_rs2.in_shift
+461,464c556,558
+<               //A_Transpose 기능 삭제
+<               //a_transpose := config_ex_rs1.a_transpose
+<               b_transpose := config_ex_rs1.b_transpose
+<               /* dataflow도 ws만 지원
+---
+>               a_transpose := config_ex_rs1.a_transpose
+>               bd_transpose := config_ex_rs1.b_transpose
+> 
+468d561
+<               */
+473a567,576
+>           }.otherwise { // config_cmd_type === CONFIG_IM2COL
+>             ocol := cmd.bits(0).cmd.rs2(63, 56)
+>             kdim2 := cmd.bits(0).cmd.rs2(55, 48) //increased bitwidth
+>             krow := cmd.bits(0).cmd.rs2(47, 44) //increased bitwidth
+>             channel := cmd.bits(0).cmd.rs2(31, 23)
+>             weight_stride := cmd.bits(0).cmd.rs2(22, 20)
+>             weight_double_bank := cmd.bits(0).cmd.rs1(58) //added
+>             weight_triple_bank := cmd.bits(0).cmd.rs1(59)
+>             row_left := cmd.bits(0).cmd.rs1(57, 54)
+>             row_turn := cmd.bits(0).cmd.rs1(53, 42)
+486,488c589,594
+<           start_inputting_a := false.B
+<           start_inputting_b := true.B
+<           start_inputting_d := false.B
+---
+>           //start_inputting_a := current_dataflow === Dataflow.OS.id.U
+>           //start_inputting_d := true.B
+> 
+>           start_inputting_a := a_should_be_fed_into_transposer
+>           start_inputting_b := b_should_be_fed_into_transposer
+>           start_inputting_d := true.B
+511,512c617,618
+<           start_inputting_a := true.B
+<           start_inputting_d := true.B
+---
+>           start_inputting_a := !a_should_be_fed_into_transposer
+>           start_inputting_b := !b_should_be_fed_into_transposer
+517,522c623,629
+<         // Flush , TODO: flush를 굳이 해야하나? 생각해보기
+<         // .elsewhen(matmul_in_progress && (DoConfig)) {
+<         //   control_state := flush
+<         // }
+<       // }.elsewhen(matmul_in_progress && current_dataflow === Dataflow.OS.id.U) {
+<       //   control_state := flush
+---
+>         // Flush
+>         .elsewhen(matmul_in_progress && (current_dataflow === Dataflow.OS.id.U || DoConfig)) {
+>           control_state := flush
+>         }
+>       }.elsewhen(matmul_in_progress && current_dataflow === Dataflow.OS.id.U) {
+>         // TODO code duplication
+>         control_state := flush
+528,530c635,637
+<         start_inputting_a := false.B
+<         start_inputting_b := true.B
+<         start_inputting_d := false.B
+---
+>         start_inputting_a := a_should_be_fed_into_transposer
+>         start_inputting_b := b_should_be_fed_into_transposer
+>         start_inputting_d := true.B
+538a646,648
+>           when(current_dataflow === Dataflow.OS.id.U) {
+>             in_prop_flush := !rs2s(0).asTypeOf(local_addr_t).is_garbage()
+>           }
+554a665,667
+>           when(current_dataflow === Dataflow.OS.id.U) {
+>             in_prop_flush := !rs2s(1).asTypeOf(local_addr_t).is_garbage()
+>           }
+559,560c672,673
+<         start_inputting_a := true.B
+<         start_inputting_d := true.B
+---
+>         start_inputting_a := !a_should_be_fed_into_transposer
+>         start_inputting_b := !b_should_be_fed_into_transposer
+570c683
+<       when(wontolic.io.req.fire) {
+---
+>       when(mesh.io.req.fire) {
+575c688
+<       when(wontolic.io.req.ready) {
+---
+>       when(mesh.io.req.ready) {
+582c695
+< 
+---
+>   // Computing logic
+620a734,736
+>     val a_transpose = Bool()
+>     val bd_transpose = Bool()
+> 
+626a743,745
+>     val shift = UInt(log2Up(accType.getWidth).W)
+> 
+>     val im2colling = Bool()
+629,632d747
+<     val b_transpose = Bool()
+<     val in_acc = Bool()
+<     val in_preload = Bool()
+<     val is_mpgemm = Bool()
+673a789,791
+>   mesh_cntl_signals_q.io.enq.bits.a_transpose := a_transpose
+>   mesh_cntl_signals_q.io.enq.bits.bd_transpose := bd_transpose
+> 
+675c793
+<   mesh_cntl_signals_q.io.enq.bits.rob_id.bits := cmd.bits(bc_address_place).rob_id.bits
+---
+>   mesh_cntl_signals_q.io.enq.bits.rob_id.bits := cmd.bits(preload_cmd_place).rob_id.bits
+677c795
+<   mesh_cntl_signals_q.io.enq.bits.dataflow := dataflow.id.U
+---
+>   mesh_cntl_signals_q.io.enq.bits.dataflow := current_dataflow
+678a797
+>   mesh_cntl_signals_q.io.enq.bits.shift := in_shift
+680,684c799
+<   mesh_cntl_signals_q.io.enq.bits.first := !a_fire_started && !b_fire_started && !d_fire_started
+<   mesh_cntl_signals_q.io.enq.bits.b_transpose := b_transpose
+<   mesh_cntl_signals_q.io.enq.bits.in_acc := in_acc_buf
+<   mesh_cntl_signals_q.io.enq.bits.in_preload := in_preload
+<   mesh_cntl_signals_q.io.enq.bits.is_mpgemm := is_mpgemm
+---
+>   mesh_cntl_signals_q.io.enq.bits.im2colling := im2col_wire && im2col_en //im2col_wire
+685a801
+>   mesh_cntl_signals_q.io.enq.bits.first := !a_fire_started && !b_fire_started && !d_fire_started
+688a805
+>   val im2ColData = io.im2col.resp.bits.a_im2col.asUInt
+691a809
+>   val im2ColValid = io.im2col.resp.valid
+693,696c811,814
+<   mesh_cntl_signals_q.io.deq.ready := (!cntl.a_fire || wontolic.io.a.fire || !wontolic.io.a.ready) &&
+<     (!cntl.b_fire || wontolic.io.b.fire || !wontolic.io.b.ready) &&
+<     (!cntl.d_fire || wontolic.io.d.fire || !wontolic.io.d.ready) &&
+<     (!cntl.first || wontolic.io.req.ready)
+---
+>   mesh_cntl_signals_q.io.deq.ready := (!cntl.a_fire || mesh.io.a.fire || !mesh.io.a.ready) &&
+>     (!cntl.b_fire || mesh.io.b.fire || !mesh.io.b.ready) &&
+>     (!cntl.d_fire || mesh.io.d.fire || !mesh.io.d.ready) &&
+>     (!cntl.first || mesh.io.req.ready)
+698c816
+<   val dataA_valid = cntl.a_garbage || cntl.a_unpadded_cols === 0.U || Mux(cntl.a_read_from_acc, accReadValid(cntl.a_bank_acc), readValid(cntl.a_bank))
+---
+>   val dataA_valid = cntl.a_garbage || cntl.a_unpadded_cols === 0.U || Mux(cntl.im2colling, im2ColValid, Mux(cntl.a_read_from_acc, accReadValid(cntl.a_bank_acc), readValid(cntl.a_bank)))
+701c819
+<     cntl.preload_zeros -> false.B,
+---
+>     cntl.accumulate_zeros -> false.B,
+705c823
+<     cntl.accumulate_zeros -> false.B,
+---
+>     cntl.preload_zeros -> false.B,
+709c827
+< //preload_zero일 때 padding 추가해서 pipeline 맞춰주기
+---
+>   //added for negative bitshift
+711c829,830
+<   preload_zero_counter := wrappingAdd(preload_zero_counter, 1.U, block_size.U, dataA_valid && dataB_valid && cntl.preload_zeros && (cntl.perform_single_preload || cntl.perform_mul_pre))
+---
+>   //val neg_shift_sub = block_size.U - cntl.c_rows
+>   preload_zero_counter := wrappingAdd(preload_zero_counter, 1.U, block_size.U, dataA_valid && dataD_valid && cntl.preload_zeros && (cntl.perform_single_preload || cntl.perform_mul_pre))
+713,715c832,834
+<   val dataA_unpadded = Mux(cntl.a_read_from_acc, accReadData(cntl.a_bank_acc), readData(cntl.a_bank))
+<   val dataB_unpadded = MuxCase(readData(cntl.b_bank), Seq(cntl.preload_zeros -> 0.U, cntl.b_read_from_acc -> accReadData(cntl.b_bank_acc)))
+<   val dataD_unpadded = MuxCase(readData(cntl.d_bank), Seq(cntl.accumulate_zeros -> 0.U, cntl.d_read_from_acc -> accReadData(cntl.d_bank_acc)))
+---
+>   val dataA_unpadded = Mux(cntl.im2colling, im2ColData, Mux(cntl.a_read_from_acc, accReadData(cntl.a_bank_acc), readData(cntl.a_bank)))
+>   val dataB_unpadded = MuxCase(readData(cntl.b_bank), Seq(cntl.accumulate_zeros -> 0.U, cntl.b_read_from_acc -> accReadData(cntl.b_bank_acc)))
+>   val dataD_unpadded = MuxCase(readData(cntl.d_bank), Seq(cntl.preload_zeros -> 0.U, cntl.d_read_from_acc -> accReadData(cntl.d_bank_acc)))
+723c842
+<     when (cntl.a_fire && wontolic.io.a.fire && !cntl.a_garbage && cntl.a_unpadded_cols > 0.U ) {
+---
+>     when (cntl.a_fire && mesh.io.a.fire && !cntl.a_garbage && cntl.a_unpadded_cols > 0.U && !cntl.im2colling) {
+731c850
+<     when (cntl.b_fire && wontolic.io.b.fire && !cntl.b_garbage && !cntl.preload_zeros && cntl.b_unpadded_cols > 0.U) {
+---
+>     when (cntl.b_fire && mesh.io.b.fire && !cntl.b_garbage && !cntl.accumulate_zeros && cntl.b_unpadded_cols > 0.U) {
+739c858
+<     when (cntl.d_fire && wontolic.io.d.fire && !cntl.d_garbage && !cntl.accumulate_zeros && cntl.d_unpadded_cols > 0.U) {
+---
+>     when (cntl.d_fire && mesh.io.d.fire && !cntl.d_garbage && !cntl.preload_zeros && cntl.d_unpadded_cols > 0.U) {
+756,762c875,881
+<     wontolic.io.a.valid := cntl.a_fire && dataA_valid
+<     wontolic.io.b.valid := cntl.b_fire && dataB_valid
+<     wontolic.io.d.valid := cntl.d_fire && dataD_valid
+< 
+<     wontolic.io.a.bits := dataA.asTypeOf(Vec(meshColumns, inputType))
+<     wontolic.io.b.bits := Mux(cntl.b_transpose, dataB.asTypeOf(Vec(meshColumns, inputType)), dataB.asTypeOf(Vec(meshRows, inputType)))
+<     wontolic.io.d.bits := dataD.asTypeOf(Vec(meshRows, inputType))
+---
+>     mesh.io.a.valid := cntl.a_fire && dataA_valid
+>     mesh.io.b.valid := cntl.b_fire && dataB_valid
+>     mesh.io.d.valid := cntl.d_fire && dataD_valid
+> 
+>     mesh.io.a.bits := dataA.asTypeOf(Vec(meshRows, Vec(tileRows, inputType)))
+>     mesh.io.b.bits := dataB.asTypeOf(Vec(meshColumns, Vec(tileColumns, inputType)))
+>     mesh.io.d.bits := dataD.asTypeOf(Vec(meshColumns, Vec(tileColumns, inputType)))
+764c883
+<     wontolic.io.req.valid := mesh_cntl_signals_q.io.deq.fire && (cntl.a_fire || cntl.b_fire || cntl.d_fire)
+---
+>     mesh.io.req.valid := mesh_cntl_signals_q.io.deq.fire && (cntl.a_fire || cntl.b_fire || cntl.d_fire)
+766,767c885,887
+<     wontolic.io.req.bits.tag.addr := cntl.c_addr
+<     wontolic.io.req.bits.total_rows := cntl.total_rows
+---
+>     mesh.io.req.bits.tag.addr := cntl.c_addr
+> 
+>     mesh.io.req.bits.total_rows := cntl.total_rows
+771,772c891,892
+<     wontolic.io.a.bits := 0.U.asTypeOf(Vec(meshColumns, inputType))
+<     wontolic.io.b.bits := Mux(cntl.b_transpose, dataB.asTypeOf(Vec(meshColumns, inputType)), dataB.asTypeOf(Vec(meshRows, inputType)))
+---
+>     mesh.io.a.bits := Mux(a_should_be_fed_into_transposer, dataA.asUInt, 0.U).asTypeOf(Vec(meshRows, Vec(tileRows, inputType)))
+>     mesh.io.b.bits := Mux(b_should_be_fed_into_transposer, dataB.asUInt, 0.U).asTypeOf(Vec(meshColumns, Vec(tileColumns, inputType)))
+776,778c896,898
+<     wontolic.io.a.bits := dataA.asUInt.asTypeOf(Vec(meshColumns, inputType))
+<     wontolic.io.b.bits := Mux(cntl.b_transpose, 0.U.asTypeOf(Vec(meshColumns, inputType)), 0.U.asTypeOf(Vec(meshRows, inputType)))
+<     wontolic.io.req.bits.tag.addr.make_this_garbage()
+---
+>     mesh.io.a.bits := Mux(a_should_be_fed_into_transposer, 0.U, dataA.asUInt).asTypeOf(Vec(meshRows, Vec(tileRows, inputType)))
+>     mesh.io.b.bits := Mux(b_should_be_fed_into_transposer, 0.U, dataB.asUInt).asTypeOf(Vec(meshColumns, Vec(tileColumns, inputType)))
+>     mesh.io.req.bits.tag.addr.make_this_garbage()
+785c905
+<   val w_total_output_rows = wontolic.io.resp.bits.total_rows
+---
+>   val w_total_output_rows = mesh.io.resp.bits.total_rows
+787c907,908
+<   val w_address = wontolic.io.resp.bits.tag.addr + output_counter * c_addr_stride 
+---
+>   val w_address = Mux(current_dataflow === Dataflow.WS.id.U, mesh.io.resp.bits.tag.addr + output_counter * c_addr_stride,
+>     mesh.io.resp.bits.tag.addr + (w_total_output_rows - 1.U - output_counter * c_addr_stride))
+793c914
+<   val is_garbage_addr = wontolic.io.resp.bits.tag.addr.is_garbage()
+---
+>   val is_garbage_addr = mesh.io.resp.bits.tag.addr.is_garbage()
+795,796c916,917
+<   val w_matrix_rows = wontolic.io.resp.bits.tag.rows
+<   val w_matrix_cols = wontolic.io.resp.bits.tag.cols
+---
+>   val w_matrix_rows = mesh.io.resp.bits.tag.rows
+>   val w_matrix_cols = mesh.io.resp.bits.tag.cols
+798c919,920
+<   val write_this_row = output_counter < w_matrix_rows
+---
+>   val write_this_row = Mux(current_dataflow === Dataflow.WS.id.U, output_counter < w_matrix_rows,
+>     w_total_output_rows - 1.U - output_counter < w_matrix_rows)
+801,805d922
+<   val mpgemm_output_data = VecInit(wontolic.io.resp.bits.data.map(_.withWidthOf(accType)))
+<   val mpgemm_data_chunks = VecInit(mpgemm_output_data.grouped(16).map(chunk => VecInit(chunk)).toSeq)
+< 
+<   val acc_valid = start_array_outputting && write_to_acc && !is_garbage_addr && write_this_row
+< 
+808c925
+<     val activated_wdata = VecInit(wontolic.io.resp.bits.data.map{ e =>
+---
+>     val activated_wdata = VecInit(mesh.io.resp.bits.data.map(v => VecInit(v.map { e =>
+814c931
+<     })
+---
+>     })))
+832c949
+<       io.acc.write(i).valid := Mux(wontolic.io.resp.bits.is_mpgemm, acc_valid, acc_valid && w_bank === i.U)
+---
+>       io.acc.write(i).valid := start_array_outputting && w_bank === i.U && write_to_acc && !is_garbage_addr && write_this_row
+834,836c951
+<       // val flatData = VecInit(wontolic.io.resp.bits.data.map(_.withWidthOf(accType)).toList)
+<       val flatData = Mux(wontolic.io.resp.bits.is_mpgemm, mpgemm_data_chunks(i), mpgemm_data_chunks(0))
+<       io.acc.write(i).bits.data :=  VecInit(flatData.map(e => VecInit(Seq(e))))
+---
+>       io.acc.write(i).bits.data := VecInit(mesh.io.resp.bits.data.map(v => VecInit(v.map(e => e.withWidthOf(accType)))))
+855c970
+<   when(wontolic.io.resp.fire && wontolic.io.resp.bits.tag.rob_id.valid) {
+---
+>   when(mesh.io.resp.fire && mesh.io.resp.bits.tag.rob_id.valid) {
+857c972
+<     val last = wontolic.io.resp.bits.last
+---
+>     val last = mesh.io.resp.bits.last
+862c977
+<       io.completed.bits := wontolic.io.resp.bits.tag.rob_id.bits
+---
+>       io.completed.bits := mesh.io.resp.bits.tag.rob_id.bits
+888c1003
+<   io.counter.connectEventSignal(CounterEvent.EXE_ACTIVE_CYCLE, firing || matmul_in_progress)
+---
+>   io.counter.connectEventSignal(CounterEvent.EXE_ACTIVE_CYCLE, control_state === compute)
+901c1016
+<     !(!cntl.a_fire || wontolic.io.a.fire || !wontolic.io.a.ready) && cntl.a_read_from_acc)
+---
+>     !(!cntl.a_fire || mesh.io.a.fire || !mesh.io.a.ready) && cntl.a_read_from_acc && !cntl.im2colling)
+903c1018
+<     !(!cntl.b_fire || wontolic.io.b.fire || !wontolic.io.b.ready) && cntl.b_read_from_acc)
+---
+>     !(!cntl.b_fire || mesh.io.b.fire || !mesh.io.b.ready) && cntl.b_read_from_acc)
+905c1020
+<     !(!cntl.d_fire || wontolic.io.d.fire || !wontolic.io.d.ready) && cntl.d_read_from_acc)
+---
+>     !(!cntl.d_fire || mesh.io.d.fire || !mesh.io.d.ready) && cntl.d_read_from_acc)
+907c1022
+<     !(!cntl.a_fire || wontolic.io.a.fire || !wontolic.io.a.ready) && !cntl.a_read_from_acc)
+---
+>     !(!cntl.a_fire || mesh.io.a.fire || !mesh.io.a.ready) && !cntl.a_read_from_acc && !cntl.im2colling)
+909c1024
+<     !(!cntl.b_fire || wontolic.io.b.fire || !wontolic.io.b.ready) && !cntl.b_read_from_acc)
+---
+>     !(!cntl.b_fire || mesh.io.b.fire || !mesh.io.b.ready) && !cntl.b_read_from_acc)
+911c1026
+<     !(!cntl.d_fire || wontolic.io.d.fire || !wontolic.io.d.ready) && !cntl.d_read_from_acc)
+---
+>     !(!cntl.d_fire || mesh.io.d.fire || !mesh.io.d.ready) && !cntl.d_read_from_acc)
+922,930c1037
+< 
+<  // Performance counter
+<   io.counter.connectEventSignal(CounterEvent.IM2COL_ACTIVE_CYCLES, false.B)
+<   io.counter.connectEventSignal(CounterEvent.IM2COL_MEM_CYCLES, false.B)
+<   io.counter.connectEventSignal(CounterEvent.IM2COL_TRANSPOSER_WAIT_CYCLE, false.B)
+<   io.counter.connectEventSignal(CounterEvent.TRANSPOSE_PRELOAD_UNROLLER_ACTIVE_CYCLES, false.B)  
+< 
+< 
+< }
+\ No newline at end of file
+---
+> }
+<=======FrontendTLB.scala=======>
+<=======GemminiConfigs.scala=======>
+21d20
+<                                                                              weightType: T,
+45c44
+<                                                                              acc_banks: Int = 4,
+---
+>                                                                              acc_banks: Int = 2,
+<=======GemminiISA.scala=======>
+37,44d36
+<   val GEMV_LOOP_WS = 23.U
+<   val GEMV_LOOP_WS_CONFIG_BOUNDS = 24.U
+<   val GEMV_LOOP_WS_CONFIG_ADDRS_AB = 25.U
+<   val GEMV_LOOP_WS_CONFIG_ADDRS_DC = 26.U
+<   val GEMV_LOOP_WS_CONFIG_STRIDES_AB = 27.U
+<   val GEMV_LOOP_WS_CONFIG_STRIDES_DC = 28.U
+< 
+< 
+<=======GemvLoopMatmul.scala=======>
+<=======InstructionCompression.scala=======>
+<=======LoadController.scala=======>
+<=======LocalAddr.scala=======>
+35,51c35,36
+<   // def acc_bank(dummy: Int = 0) = if (accAddrBits == accBankRowBits) 0.U else data(accAddrBits - 1, accBankRowBits)
+<   // def acc_row(dummy: Int = 0) = data(accBankRowBits - 1, 0)
+<   // acc bank 를 block이 round robin 방식으로 쓰도록 수정
+<   private val accBlockSize = 16 // 주소 16개 단위로 뱅크 순환
+<   private val accBlockOffsetBits = log2Ceil(accBlockSize) // = 4 bits
+<   def acc_bank(dummy: Int = 0) = data(accBlockOffsetBits + accBankBits - 1, accBlockOffsetBits)
+<   // 예: 4뱅크, 16개 블록 크기 -> data(4+2-1, 4) -> data(5, 4)
+< 
+<   def acc_row(dummy: Int = 0) = {
+<     // 뱅크 선택 비트보다 상위에 있는 비트들
+<     val upper_bits = data(accAddrBits - 1, accBlockOffsetBits + accBankBits)
+<     // 블록 내 오프셋 비트들
+<     val lower_bits = data(accBlockOffsetBits - 1, 0)
+< 
+<     // 두 비트 그룹을 합쳐서(concatenate) 최종 행 주소를 만듭니다.
+<     Cat(upper_bits, lower_bits)
+<   }
+---
+>   def acc_bank(dummy: Int = 0) = if (accAddrBits == accBankRowBits) 0.U else data(accAddrBits - 1, accBankRowBits)
+>   def acc_row(dummy: Int = 0) = data(accBankRowBits - 1, 0)
+<=======LoopConv.scala=======>
+1251d1250
+<   io.out.bits.from_gemv_fsm := Mux(loop_configured, false.B, cmd.bits.from_gemv_fsm)
+<=======LoopMatmul.scala=======>
+185c185
+<   val rows = block_size.U - Mux(row_iterator === max_row_iterator-1.U, row_pad, 0.U)
+---
+>   val rows = block_size.U - Mux(max_row_iterator === max_row_iterator-1.U, row_pad, 0.U)
+342,343c342,343
+<   val a_transpose = Bool()
+<   val b_transpose = Bool()
+---
+>   val a_tranpose = Bool()
+>   val b_tranpose = Bool()
+350d349
+<   val is_mpgemm = Bool()
+394,397c393,396
+<   val a_row = Mux(req.a_transpose, k, i)
+<   val a_col = Mux(req.a_transpose, i, k)
+<   val b_row = Mux(req.b_transpose, j, k)
+<   val b_col = Mux(req.b_transpose, k, j)
+---
+>   val a_row = Mux(req.a_tranpose, k, i)
+>   val a_col = Mux(req.a_tranpose, i, k)
+>   val b_row = Mux(req.b_tranpose, j, k)
+>   val b_col = Mux(req.b_tranpose, k, j)
+399,400c398,399
+<   val a_max_col = Mux(req.a_transpose, req.max_i, req.max_k)
+<   val b_max_col = Mux(req.b_transpose, req.max_k, req.max_j)
+---
+>   val a_max_col = Mux(req.a_tranpose, req.max_i, req.max_k)
+>   val b_max_col = Mux(req.b_tranpose, req.max_k, req.max_j)
+404,406c403
+<   val c_addr_base = c_addr_start + (i * req.max_j + j) * block_size.U
+<   val c_addr_mpgemm = c_addr_start + (i * req.max_j + j) * block_size.U * 4.U
+<   val c_addr = Mux(req.is_mpgemm, c_addr_mpgemm, c_addr_base)
+---
+>   val c_addr = c_addr_start + (i * req.max_j + j) * block_size.U
+415,416d411
+<   val is_mpgemm = req.is_mpgemm
+< 
+430d424
+<   pre_cmd_rs2._spacer2 := Cat(is_mpgemm, 0.U((pre_cmd_rs2._spacer2.getWidth-1).W))
+450d443
+<   comp_cmd_rs2._spacer2 := Cat(is_mpgemm, 0.U((comp_cmd_rs2._spacer2.getWidth-1).W)) 
+466c459
+<   val ldb_ahead = io.ldb_completed || io.ld_kb > k || (io.ld_kb === k && io.ld_j > j)
+---
+>   val ldb_ahead = io.ldb_completed || io.ld_kb > k || (io.ld_ka === k && io.ld_j > j)
+501c494
+<   assert(!(state =/= idle && req.a_transpose && req.b_transpose))
+---
+>   assert(!(state =/= idle && req.a_tranpose && req.b_tranpose))
+722,723d714
+<   val is_mpgemm = Bool()
+< 
+869d859
+<   io.out.bits.from_gemv_fsm := Mux(loop_configured, false.B, cmd.bits.from_gemv_fsm)
+949c939
+<         loop_being_configured.is_mpgemm := cmd.bits.cmd.rs1(20)
+---
+> 
+1019,1020c1009,1010
+<   ex.io.req.bits.a_transpose := loop_requesting_ex.a_transpose
+<   ex.io.req.bits.b_transpose := loop_requesting_ex.b_transpose
+---
+>   ex.io.req.bits.a_tranpose := loop_requesting_ex.a_transpose
+>   ex.io.req.bits.b_tranpose := loop_requesting_ex.b_transpose
+1024d1013
+<   ex.io.req.bits.is_mpgemm := loop_requesting_ex.is_mpgemm
+1064c1053
+<   stC.io.req.bits.max_j := Mux(loop_requesting_st.is_mpgemm, loop_requesting_st.max_j * 4.U, loop_requesting_st.max_j)
+---
+>   stC.io.req.bits.max_j := loop_requesting_st.max_j
+<=======LoopUnroller.scala=======>
+<=======MpArray.scala=======>
+<=======MpExeUnit.scala=======>
+<=======MpPE.scala=======>
+<=======MpWontolic.scala=======>
+<=======Mularray.scala=======>
+<=======MultiHeadedQueue.scala=======>
+<=======MultiTailedQueue.scala=======>
+<=======Normalizer.scala=======>
+32,34d31
+< // Pipelined version 1
+< 
+< 
+36a34,35
+>   // Each lane computes a sum, or an error-squared sum
+> 
+60,132c59,81
+<   // -------------------------
+<   // S0) 입력/상수 로컬 래치 (팬아웃 절감)
+<   // -------------------------
+<   val s0w = Wire(Valid(new Bundle {
+<     val len = io.ins.bits.len.cloneType
+<     val data = Vec(n_lanes, acc_t.cloneType)
+<     val mean = acc_t.cloneType
+<     val max  = acc_t.cloneType
+<     val cmd  = NormCmd()
+<     val stats_id = io.ins.bits.stats_id.cloneType
+<     val iexp_const = new IExpConst(acc_t)
+<   }))
+<   s0w.valid := io.ins.valid
+<   s0w.bits.len := io.ins.bits.len
+<   s0w.bits.data := io.ins.bits.data
+<   s0w.bits.mean := io.ins.bits.mean
+<   s0w.bits.max  := io.ins.bits.max
+<   s0w.bits.cmd  := io.ins.bits.cmd
+<   s0w.bits.stats_id := io.ins.bits.stats_id
+<   s0w.bits.iexp_const := io.ins.bits.iexp_const
+<   val s0 = Pipe(s0w, 1) // ★ 1단: 상수/메타 로컬 복제
+< 
+<   // -------------------------
+<   // S1) 요소별 변환 (iexp, (d-mean)^2, etc.)
+<   // -------------------------
+<   val s1w = Wire(Valid(new Bundle {
+<     val mapped = Vec(n_lanes, acc_t.cloneType)
+<     val stats_id = io.ins.bits.stats_id.cloneType
+<   }))
+<   s1w.valid := s0.valid
+<   s1w.bits.stats_id := s0.bits.stats_id
+<   s1w.bits.mapped := VecInit(s0.bits.data.zipWithIndex.map { case (d, i) =>
+<     val doUse = i.U < s0.bits.len
+<     val iexp_c = s0.bits.iexp_const
+<     val iexp_result = iexp(d - s0.bits.max, iexp_c.qln2, iexp_c.qln2_inv, iexp_c.qb, iexp_c.qc)
+<     val transformed = MuxCase(d, Seq(
+<       (s0.bits.cmd === NormCmd.VARIANCE || s0.bits.cmd === NormCmd.INV_STDDEV) -> ((d - s0.bits.mean) * (d - s0.bits.mean)).withWidthOf(acc_t),
+<       (s0.bits.cmd === NormCmd.SUM_EXP || s0.bits.cmd === NormCmd.INV_SUM_EXP) -> iexp_result.withWidthOf(acc_t)
+<     )).withWidthOf(acc_t)
+<     Mux(doUse, transformed, d.zero)
+<   })
+<   val s1 = Pipe(s1w, 1) // ★ 1단: 무거운 per-lane 연산 뒤를 절단
+< 
+<   // -------------------------
+<   // S2) 부분합(Adder tree) 1단계
+<   // -------------------------
+<   def groupReduce4(xs: Seq[T]): Seq[T] = xs.grouped(4).map(_.reduce(_ + _)).toSeq
+<   val lvl1 = groupReduce4(s1.bits.mapped)
+<   val s2w = Wire(Valid(new Bundle {
+<     val partial = Vec(lvl1.length, acc_t.cloneType)
+<     val stats_id = io.ins.bits.stats_id.cloneType
+<   }))
+<   s2w.valid := s1.valid
+<   s2w.bits.stats_id := s1.bits.stats_id
+<   s2w.bits.partial := VecInit(lvl1)
+<   val s2 = Pipe(s2w, 1) // ★ 1단: adder-tree 중간 절단
+< 
+<   // -------------------------
+<   // S3) 부분합(Adder tree) 2단계 + 최종
+<   //    (필요시 한 번 더 groupReduce4 + Pipe 추가하세요)
+<   // -------------------------
+<   val lvl2 = groupReduce4(s2.bits.partial)
+<   val finalSum =
+<     if (lvl2.length == 1) lvl2.head
+<     else lvl2.reduce(_ + _)
+< 
+<   // 최종 파이프 (외부 파라미터 latency에서 우리가 넣은 3단 만큼 보정)
+<   val extraStages = 3 // s0, s1, s2
+<   val pipe = Module(new Pipeline[LaneOutput](new LaneOutput, math.max(0, latency - extraStages))())
+< 
+<   pipe.io.in.valid := s2.valid
+<   pipe.io.in.bits.result := finalSum
+<   pipe.io.in.bits.stats_id := s2.bits.stats_id
+---
+>   val cmd = io.ins.bits.cmd
+>   val mean = io.ins.bits.mean
+>   val iexp_c = io.ins.bits.iexp_const
+> 
+>   val data = io.ins.bits.data.zipWithIndex.map { case (d, i) =>
+>     val iexp_result = iexp(d - io.ins.bits.max, iexp_c.qln2, iexp_c.qln2_inv, iexp_c.qb, iexp_c.qc)
+>     Mux(i.U < io.ins.bits.len,
+>       MuxCase(d, Seq(
+>         (cmd === NormCmd.VARIANCE || cmd === NormCmd.INV_STDDEV) -> (d-mean)*(d-mean),
+>         (cmd === NormCmd.SUM_EXP || cmd === NormCmd.INV_SUM_EXP) ->
+>           iexp_result //iexp(d - io.ins.bits.max, iexp_c.qln2, iexp_c.qln2_inv, iexp_c.qb, iexp_c.qc)
+>       )).withWidthOf(acc_t),
+>       d.zero)
+>   }
+> 
+>   val result = data.reduce(_ + _)
+> 
+>   val pipe = Module(new Pipeline[LaneOutput](new LaneOutput, latency)())
+> 
+>   pipe.io.in.valid := io.ins.valid
+>   // io.ins.ready := pipe.io.in.ready
+>   pipe.io.in.bits.result := result
+>   pipe.io.in.bits.stats_id := io.ins.bits.stats_id
+135d83
+<   io.out.bits  := pipe.io.out.bits
+136a85,86
+>   // pipe.io.out.ready := io.out.ready
+>   io.out.bits := pipe.io.out.bits
+141d90
+< 
+143a93,94
+>   // Each lane computes a sum, or an error-squared sum
+> 
+163,183c114,116
+<   // S0) 입력 래치
+<   val s0w = Wire(Valid(new Bundle {
+<     val len = io.ins.bits.len.cloneType
+<     val data = Vec(n_lanes, acc_t.cloneType)
+<     val stats_id = io.ins.bits.stats_id.cloneType
+<   }))
+<   s0w.valid := io.ins.valid
+<   s0w.bits := io.ins.bits
+<   val s0 = Pipe(s0w, 1)
+< 
+<   // S1) 마스킹 적용
+<   val s1w = Wire(Valid(new Bundle {
+<     val masked = Vec(n_lanes, acc_t.cloneType)
+<     val stats_id = io.ins.bits.stats_id.cloneType
+<   }))
+<   s1w.valid := s0.valid
+<   s1w.bits.stats_id := s0.bits.stats_id
+<   s1w.bits.masked := VecInit(s0.bits.data.zipWithIndex.map { case (d, i) =>
+<     Mux(i.U < s0.bits.len, d.withWidthOf(acc_t), d.minimum)
+<   })
+<   val s1 = Pipe(s1w, 1)
+---
+>   val data = io.ins.bits.data.zipWithIndex.map { case (d, i) =>
+>     Mux(i.U < io.ins.bits.len, d.withWidthOf(acc_t), d.minimum)
+>   }
+185,205c118,135
+<   // S2) 부분-최대 (group-of-4) + 파이프
+<   def groupMax4(xs: Seq[T]): Seq[T] = xs.grouped(4).map(_.reduce((a,b) => Mux(a > b, a, b))).toSeq
+<   val lvl1 = groupMax4(s1.bits.masked)
+<   val s2w = Wire(Valid(new Bundle {
+<     val partial = Vec(lvl1.length, acc_t.cloneType)
+<     val stats_id = io.ins.bits.stats_id.cloneType
+<   }))
+<   s2w.valid := s1.valid
+<   s2w.bits.stats_id := s1.bits.stats_id
+<   s2w.bits.partial := VecInit(lvl1)
+<   val s2 = Pipe(s2w, 1)
+< 
+<   // S3) 최종 최대
+<   val lvl2 = groupMax4(s2.bits.partial)
+<   val finalMax = if (lvl2.length == 1) lvl2.head else lvl2.reduce((a,b) => Mux(a > b, a, b))
+< 
+<   val extraStages = 3
+<   val pipe = Module(new Pipeline[LaneOutput](new LaneOutput, math.max(0, latency - extraStages))())
+<   pipe.io.in.valid := s2.valid
+<   pipe.io.in.bits.result := finalMax
+<   pipe.io.in.bits.stats_id := s2.bits.stats_id
+---
+>   def treeMax(x: Seq[T]): T = {
+>     if (x.length == 1) {
+>       x.head
+>     } else {
+>       val a = treeMax(x.slice(0, x.length / 2)) // ayy slice
+>       val b = treeMax(x.slice(x.length / 2, x.length))
+>       Mux(a > b, a, b)
+>     }
+>   }
+> 
+>   val result = treeMax(data)
+> 
+>   val pipe = Module(new Pipeline[LaneOutput](new LaneOutput, latency)())
+> 
+>   pipe.io.in.valid := io.ins.valid
+>   // io.ins.ready := pipe.io.in.ready
+>   pipe.io.in.bits.result := result
+>   pipe.io.in.bits.stats_id := io.ins.bits.stats_id
+208d137
+<   io.out.bits  := pipe.io.out.bits
+209a139,140
+>   // pipe.io.out.ready := io.out.ready
+>   io.out.bits := pipe.io.out.bits
+214,330d144
+< 
+< // Original version
+< 
+< // class AccumulationLanes[T <: Data](num_stats: Int, acc_t: T, n_lanes: Int, latency: Int)(implicit ev: Arithmetic[T])
+< //   extends Module {
+< //   // Each lane computes a sum, or an error-squared sum
+< 
+< //   import ev._
+< 
+< //   class LaneOutput extends Bundle {
+< //     val result = acc_t.cloneType
+< //     val stats_id = UInt(log2Up(num_stats).W)
+< //   }
+< 
+< //   val io = IO(new Bundle {
+< //     val ins = Flipped(Valid(new Bundle {
+< //       val len = UInt(log2Up(n_lanes+1).W)
+< //       val data = Vec(n_lanes, acc_t)
+< //       val mean = acc_t.cloneType
+< //       val max = acc_t.cloneType
+< //       val iexp_const = new IExpConst(acc_t)
+< //       val cmd = NormCmd()
+< //       val stats_id = UInt(log2Up(num_stats).W)
+< //     }))
+< 
+< //     val out = Valid(new LaneOutput)
+< 
+< //     val busy = Output(Bool())
+< //   })
+< 
+< //   val cmd = io.ins.bits.cmd
+< //   val mean = io.ins.bits.mean
+< //   val iexp_c = io.ins.bits.iexp_const
+< 
+< //   val data = io.ins.bits.data.zipWithIndex.map { case (d, i) =>
+< //     val iexp_result = iexp(d - io.ins.bits.max, iexp_c.qln2, iexp_c.qln2_inv, iexp_c.qb, iexp_c.qc)
+< //     Mux(i.U < io.ins.bits.len,
+< //       MuxCase(d, Seq(
+< //         (cmd === NormCmd.VARIANCE || cmd === NormCmd.INV_STDDEV) -> (d-mean)*(d-mean),
+< //         (cmd === NormCmd.SUM_EXP || cmd === NormCmd.INV_SUM_EXP) ->
+< //           iexp_result //iexp(d - io.ins.bits.max, iexp_c.qln2, iexp_c.qln2_inv, iexp_c.qb, iexp_c.qc)
+< //       )).withWidthOf(acc_t),
+< //       d.zero)
+< //   }
+< 
+< //   val result = data.reduce(_ + _)
+< 
+< //   val pipe = Module(new Pipeline[LaneOutput](new LaneOutput, latency)())
+< 
+< //   pipe.io.in.valid := io.ins.valid
+< //   // io.ins.ready := pipe.io.in.ready
+< //   pipe.io.in.bits.result := result
+< //   pipe.io.in.bits.stats_id := io.ins.bits.stats_id
+< 
+< //   io.out.valid := pipe.io.out.valid
+< //   pipe.io.out.ready := true.B
+< //   // pipe.io.out.ready := io.out.ready
+< //   io.out.bits := pipe.io.out.bits
+< 
+< //   io.busy := pipe.io.busy
+< // }
+< 
+< // class MaxLanes[T <: Data](num_stats: Int, acc_t: T, n_lanes: Int, latency: Int)(implicit ev: Arithmetic[T])
+< //   extends Module {
+< //   // Each lane computes a sum, or an error-squared sum
+< 
+< //   import ev._
+< 
+< //   class LaneOutput extends Bundle {
+< //     val result = acc_t.cloneType
+< //     val stats_id = UInt(log2Up(num_stats).W)
+< //   }
+< 
+< //   val io = IO(new Bundle {
+< //     val ins = Flipped(Valid(new Bundle {
+< //       val len = UInt(log2Up(n_lanes + 1).W)
+< //       val data = Vec(n_lanes, acc_t)
+< //       val stats_id = UInt(log2Up(num_stats).W)
+< //     }))
+< 
+< //     val out = Valid(new LaneOutput)
+< 
+< //     val busy = Output(Bool())
+< //   })
+< 
+< //   val data = io.ins.bits.data.zipWithIndex.map { case (d, i) =>
+< //     Mux(i.U < io.ins.bits.len, d.withWidthOf(acc_t), d.minimum)
+< //   }
+< 
+< //   def treeMax(x: Seq[T]): T = {
+< //     if (x.length == 1) {
+< //       x.head
+< //     } else {
+< //       val a = treeMax(x.slice(0, x.length / 2)) // ayy slice
+< //       val b = treeMax(x.slice(x.length / 2, x.length))
+< //       Mux(a > b, a, b)
+< //     }
+< //   }
+< 
+< //   val result = treeMax(data)
+< 
+< //   val pipe = Module(new Pipeline[LaneOutput](new LaneOutput, latency)())
+< 
+< //   pipe.io.in.valid := io.ins.valid
+< //   // io.ins.ready := pipe.io.in.ready
+< //   pipe.io.in.bits.result := result
+< //   pipe.io.in.bits.stats_id := io.ins.bits.stats_id
+< 
+< //   io.out.valid := pipe.io.out.valid
+< //   pipe.io.out.ready := true.B
+< //   // pipe.io.out.ready := io.out.ready
+< //   io.out.bits := pipe.io.out.bits
+< 
+< //   io.busy := pipe.io.busy
+< // }
+< 
+< 
+504,542d317
+< /////////////////////////////////////////////////////////////////////////
+< 
+<   // // 1) one-hot 선택 (콤비)
+<   // val out_sel_oh   = VecInit(stats.map(_.state === output))
+<   // val out_valid_pre = out_sel_oh.asUInt.orR
+<   // val out_id_pre    = OHToUInt(out_sel_oh)
+< 
+<   // val out_bits_pre = Wire(new NormalizedOutput(fullDataType, scale_t))
+<   // out_bits_pre.acc_read_resp := Mux1H(out_sel_oh, stats.map(_.req.acc_read_resp))
+<   // out_bits_pre.mean          := Mux1H(out_sel_oh, stats.map(_.mean))
+<   // out_bits_pre.max           := Mux1H(out_sel_oh, stats.map(_.max))
+<   // out_bits_pre.inv_stddev    := Mux1H(out_sel_oh, stats.map(_.inv_stddev)).asTypeOf(scale_t)
+<   // out_bits_pre.inv_sum_exp   := Mux1H(out_sel_oh, stats.map(_.inv_sum_exp)).asTypeOf(scale_t)
+< 
+<   // // 2) 데이터 + id를 한 번에 담는 Bundle
+<   // class OutPack extends Bundle {
+<   //   val bits = new NormalizedOutput(fullDataType, scale_t)
+<   //   val id   = UInt(log2Ceil(num_stats).W)
+<   // }
+< 
+<   // // 3) 1-딥 fall-through(=flow) + pipe 큐
+<   // val out_q = Module(new Queue(new OutPack, 1, flow = true, pipe = true))
+< 
+<   // // enq
+<   // out_q.io.enq.valid      := out_valid_pre
+<   // out_q.io.enq.bits.bits  := out_bits_pre
+<   // out_q.io.enq.bits.id    := out_id_pre
+< 
+<   // // deq → 외부 io.out
+<   // io.out.valid            := out_q.io.deq.valid
+<   // io.out.bits             := out_q.io.deq.bits.bits
+<   // out_q.io.deq.ready      := io.out.ready
+< 
+<   // // FSM 완료 판정용 id
+<   // val out_id_inflight     = out_q.io.deq.bits.id
+<   // // when (io.out.fire) { ... out_id_inflight 사용 ... }
+< 
+< 
+< //////////////////////////////////////////////////////////////////////////////
+874,875d648
+<       // next_state := Mux(io.out.fire && out_id_inflight === id.U, idle, state)
+<       // done       := io.out.fire && out_id_inflight === id.U
+<=======NormCmd.scala=======>
+<=======PE.scala=======>
+0a1
+> // See README.md for license details.
+6,14c7,11
+< class MulUnit[T <: Data](inputType: T, outputType: T) (implicit ev: Arithmetic[T]) extends Module {
+<     import ev._
+<     val io = IO(new Bundle {
+<         val in_a = Input(inputType)
+<         val in_b = Input(inputType)
+<         val out_result = Output(outputType)
+<     })
+<     val product = io.in_a * io.in_b
+<     io.out_result  := product.clippedToWidthOf(outputType)
+---
+> class PEControl[T <: Data : Arithmetic](accType: T) extends Bundle {
+>   val dataflow = UInt(1.W) // TODO make this an Enum
+>   val propagate = UInt(1.W) // Which register should be propagated (and which should be accumulated)?
+>   val shift = UInt(log2Up(accType.getWidth).W) // TODO this isn't correct for Floats
+> 
+17,62c14,21
+< //double buffering을 써야겠네..
+< class PE[T <: Data :Arithmetic](inputType: T, outputType: T, max_simultaneous_matmuls: Int)(implicit ev: Arithmetic[T]) extends Module{ 
+<     import ev._  
+<     val io = IO(new Bundle {
+<         val in_a = Input(inputType)
+<         val in_b = Input(inputType)
+<         val out_result = Output(outputType)
+< 
+<         val in_last = Input(Bool())
+<         val in_valid = Input(Bool())
+<         val in_id = Input( UInt(log2Up(max_simultaneous_matmuls).W))
+<         val in_prop = Input(Bool())
+<         val in_b_fire = Input(Bool())
+< 
+<         val out_last = Output(Bool())
+<         val out_valid = Output(Bool())
+<         val out_id = Output( UInt(log2Up(max_simultaneous_matmuls).W))
+<     })
+< 
+<     val mul_unit = Module(new MulUnit(inputType, outputType)(ev))
+<     
+<     when(io.in_valid){
+<       mul_unit.io.in_a := io.in_a
+<     } .otherwise{
+<       mul_unit.io.in_a := 0.U.asTypeOf(inputType)
+<     }
+<     val c1 = RegInit(0.U.asTypeOf(inputType))
+<     val c2 = RegInit(0.U.asTypeOf(inputType))
+<     //in_prop이 true이면, c1이 preload, c2가 mul에 사용
+< 
+<     //io.in_b_fire가 true일 때만 기록
+< 
+<     // 현재 토글 상태에 따라 반대쪽 버퍼를 읽어 곱셈에 사용
+<     mul_unit.io.in_b := 0.U.asTypeOf(inputType)
+<     when(io.in_prop){
+<       when(io.in_valid){mul_unit.io.in_b := c2}
+<       when (io.in_b_fire){
+<         c1 := io.in_b
+<       }
+<     }
+<     .otherwise{
+<       when(io.in_valid){mul_unit.io.in_b := c1}
+<       when(io.in_b_fire){
+<         c2 := io.in_b
+<       }
+<     } 
+---
+> class MacUnit[T <: Data](inputType: T, cType: T, dType: T) (implicit ev: Arithmetic[T]) extends Module {
+>   import ev._
+>   val io = IO(new Bundle {
+>     val in_a  = Input(inputType)
+>     val in_b  = Input(inputType)
+>     val in_c  = Input(cType)
+>     val out_d = Output(dType)
+>   })
+63a23,24
+>   io.out_d := io.in_c.mac(io.in_a, io.in_b)
+> }
+65,70c26,147
+<     io.out_result := ShiftRegister(mul_unit.io.out_result, 1)
+<     io.out_valid := io.in_valid
+<     io.out_last := io.in_last
+<     io.out_id := io.in_id
+<     
+< }
+\ No newline at end of file
+---
+> // TODO update documentation
+> /**
+>   * A PE implementing a MAC operation. Configured as fully combinational when integrated into a Mesh.
+>   * @param width Data width of operands
+>   */
+> class PE[T <: Data](inputType: T, outputType: T, accType: T, df: Dataflow.Value, max_simultaneous_matmuls: Int)
+>                    (implicit ev: Arithmetic[T]) extends Module { // Debugging variables
+>   import ev._
+> 
+>   val io = IO(new Bundle {
+>     val in_a = Input(inputType)
+>     val in_b = Input(outputType)
+>     val in_d = Input(outputType)
+>     val out_a = Output(inputType)
+>     val out_b = Output(outputType)
+>     val out_c = Output(outputType)
+> 
+>     val in_control = Input(new PEControl(accType))
+>     val out_control = Output(new PEControl(accType))
+> 
+>     val in_id = Input(UInt(log2Up(max_simultaneous_matmuls).W))
+>     val out_id = Output(UInt(log2Up(max_simultaneous_matmuls).W))
+> 
+>     val in_last = Input(Bool())
+>     val out_last = Output(Bool())
+> 
+>     val in_valid = Input(Bool())
+>     val out_valid = Output(Bool())
+> 
+>     val bad_dataflow = Output(Bool())
+>   })
+> 
+>   val cType = if (df == Dataflow.WS) inputType else accType
+> 
+>   // When creating PEs that support multiple dataflows, the
+>   // elaboration/synthesis tools often fail to consolidate and de-duplicate
+>   // MAC units. To force mac circuitry to be re-used, we create a "mac_unit"
+>   // module here which just performs a single MAC operation
+>   val mac_unit = Module(new MacUnit(inputType,
+>     if (df == Dataflow.WS) outputType else accType, outputType))
+> 
+>   val a  = io.in_a
+>   val b  = io.in_b
+>   val d  = io.in_d
+>   val c1 = Reg(cType)
+>   val c2 = Reg(cType)
+>   val dataflow = io.in_control.dataflow
+>   val prop  = io.in_control.propagate
+>   val shift = io.in_control.shift
+>   val id = io.in_id
+>   val last = io.in_last
+>   val valid = io.in_valid
+> 
+>   io.out_a := a
+>   io.out_control.dataflow := dataflow
+>   io.out_control.propagate := prop
+>   io.out_control.shift := shift
+>   io.out_id := id
+>   io.out_last := last
+>   io.out_valid := valid
+> 
+>   mac_unit.io.in_a := a
+> 
+>   val last_s = RegEnable(prop, valid)
+>   val flip = last_s =/= prop
+>   val shift_offset = Mux(flip, shift, 0.U)
+> 
+>   // Which dataflow are we using?
+>   val OUTPUT_STATIONARY = Dataflow.OS.id.U(1.W)
+>   val WEIGHT_STATIONARY = Dataflow.WS.id.U(1.W)
+> 
+>   // Is c1 being computed on, or propagated forward (in the output-stationary dataflow)?
+>   val COMPUTE = 0.U(1.W)
+>   val PROPAGATE = 1.U(1.W)
+> 
+>   io.bad_dataflow := false.B
+>   when ((df == Dataflow.OS).B || ((df == Dataflow.BOTH).B && dataflow === OUTPUT_STATIONARY)) {
+>     when(prop === PROPAGATE) {
+>       io.out_c := (c1 >> shift_offset).clippedToWidthOf(outputType)
+>       io.out_b := b
+>       mac_unit.io.in_b := b.asTypeOf(inputType)
+>       mac_unit.io.in_c := c2
+>       c2 := mac_unit.io.out_d
+>       c1 := d.withWidthOf(cType)
+>     }.otherwise {
+>       io.out_c := (c2 >> shift_offset).clippedToWidthOf(outputType)
+>       io.out_b := b
+>       mac_unit.io.in_b := b.asTypeOf(inputType)
+>       mac_unit.io.in_c := c1
+>       c1 := mac_unit.io.out_d
+>       c2 := d.withWidthOf(cType)
+>     }
+>   }.elsewhen ((df == Dataflow.WS).B || ((df == Dataflow.BOTH).B && dataflow === WEIGHT_STATIONARY)) {
+>     when(prop === PROPAGATE) {
+>       io.out_c := c1
+>       mac_unit.io.in_b := c2.asTypeOf(inputType)
+>       mac_unit.io.in_c := b
+>       io.out_b := mac_unit.io.out_d
+>       c1 := d
+>     }.otherwise {
+>       io.out_c := c2
+>       mac_unit.io.in_b := c1.asTypeOf(inputType)
+>       mac_unit.io.in_c := b
+>       io.out_b := mac_unit.io.out_d
+>       c2 := d
+>     }
+>   }.otherwise {
+>     io.bad_dataflow := true.B
+>     //assert(false.B, "unknown dataflow")
+>     io.out_c := DontCare
+>     io.out_b := DontCare
+>     mac_unit.io.in_b := b.asTypeOf(inputType)
+>     mac_unit.io.in_c := c2
+>   }
+> 
+>   when (!valid) {
+>     c1 := c1
+>     c2 := c2
+>     mac_unit.io.in_b := DontCare
+>     mac_unit.io.in_c := DontCare
+>   }
+> }
+<=======Pipeline.scala=======>
+<=======PixelRepeater.scala=======>
+<=======ReservationStation.scala=======>
+54,57d53
+<     val gemv_ld_completed = Output(UInt(log2Up(max_instructions_completed_per_type_per_cycle+1).W))
+<     val gemv_ex_completed = Output(UInt(log2Up(max_instructions_completed_per_type_per_cycle+1).W))
+<     val gemv_st_completed = Output(UInt(log2Up(max_instructions_completed_per_type_per_cycle+1).W))
+< 
+157,164d152
+< 
+<   val gemv_ld_issue_completed = WireInit(false.B)
+<   val gemv_st_issue_completed = WireInit(false.B)
+<   val gemv_ex_issue_completed = WireInit(false.B)
+< 
+<   val gemv_ld_completed = WireInit(false.B)
+<   val gemv_st_completed = WireInit(false.B)
+<   val gemv_ex_completed = WireInit(false.B)
+174,177d161
+<   io.gemv_ld_completed := gemv_ld_issue_completed +& gemv_ld_completed
+<   io.gemv_st_completed := gemv_st_issue_completed +& gemv_st_completed
+<   io.gemv_ex_completed := gemv_ex_issue_completed +& gemv_ex_completed
+< 
+428d411
+<     val from_gemv_fsm = entries_type(issue_id).bits.cmd.from_gemv_fsm
+464,467d446
+< 
+<       when (q === ldq) { gemv_ld_issue_completed := complete_on_issue && from_gemv_fsm }
+<       when (q === stq) { gemv_st_issue_completed := complete_on_issue && from_gemv_fsm }
+<       when (q === exq) { gemv_ex_issue_completed := complete_on_issue && from_gemv_fsm }
+483d461
+<       gemv_ld_completed := entries_ld(issue_id).bits.cmd.from_gemv_fsm
+492,493c470
+<       gemv_ex_completed := entries_ex(issue_id).bits.cmd.from_gemv_fsm
+< 
+---
+>       
+501d477
+<       gemv_st_completed := entries_st(issue_id).bits.cmd.from_gemv_fsm
+<=======Scratchpad.scala=======>
+190c190
+<     sp_banks * sp_bank_entries, acc_banks *  acc_bank_entries , block_rows, use_tlb_register_filter,
+---
+>     sp_banks * sp_bank_entries, acc_banks * acc_bank_entries, block_rows, use_tlb_register_filter,
+222c222
+<            acc_bank_entries, accType, acc_scale_t.asInstanceOf[V]
+---
+>           acc_bank_entries, accType, acc_scale_t.asInstanceOf[V]
+229c229
+<            acc_bank_entries, Vec(meshColumns, Vec(tileColumns, accType))
+---
+>           acc_bank_entries, Vec(meshColumns, Vec(tileColumns, accType))
+628,629c628
+<     // val acc_adders = Module(new AccPipeShared(acc_latency-1, acc_row_t, acc_banks ))
+<     val acc_adders = Seq.fill(acc_banks) { Module(new AccPipeShared(acc_latency-1, acc_row_t, 1)) }
+---
+>     val acc_adders = Module(new AccPipeShared(acc_latency-1, acc_row_t, acc_banks))
+633,634c632
+<         acc_bank_entries, 
+<         acc_row_t, acc_scale_func, acc_scale_t.asInstanceOf[V],
+---
+>         acc_bank_entries, acc_row_t, acc_scale_func, acc_scale_t.asInstanceOf[V],
+650,658c648,651
+<         // acc_adders.io.in_sel(i) := bio.adder.valid
+<         // acc_adders.io.ina(i) := bio.adder.op1
+<         // acc_adders.io.inb(i) := bio.adder.op2
+<         // bio.adder.sum := acc_adders.io.out
+< 
+<         acc_adders(i).io.in_sel(0) := bio.adder.valid
+<         acc_adders(i).io.ina(0) := bio.adder.op1
+<         acc_adders(i).io.inb(0) := bio.adder.op2
+<         bio.adder.sum := acc_adders(i).io.out
+---
+>         acc_adders.io.in_sel(i) := bio.adder.valid
+>         acc_adders.io.ina(i) := bio.adder.op1
+>         acc_adders.io.inb(i) := bio.adder.op2
+>         bio.adder.sum := acc_adders.io.out
+<=======SharedExtMem.scala=======>
+<=======StoreController.scala=======>
+<=======SyncMem.scala=======>
+<=======TagQueue.scala=======>
+<=======TilerController.scala=======>
+<=======TilerFSM.scala=======>
+<=======TilerScheduler.scala=======>
+<=======TransposePreloadUnroller.scala=======>
+<=======Transposer.scala=======>
+<=======Util.scala=======>
+<=======VectorScalarMultiplier.scala=======>
+<=======WeightedArbiter.scala=======>
+<=======Wontolic.scala=======>
+<=======XactTracker.scala=======>
+<=======ZeroWriter.scala=======>

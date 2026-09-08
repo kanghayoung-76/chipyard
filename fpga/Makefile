@@ -44,6 +44,20 @@ ifeq ($(SUB_PROJECT),vcu118)
 	FPGA_BRAND        ?= xilinx
 endif
 
+ifeq ($(SUB_PROJECT),vela_vcu118)
+	SBT_PROJECT       ?= chipyard_fpga
+	MODEL             ?= VelaFPGATestHarness
+	VLOG_MODEL        ?= VelaFPGATestHarness
+	MODEL_PACKAGE     ?= chipyard.fpga.vcu118
+	CONFIG            ?= VelaETHTestVCU118
+	CONFIG_PACKAGE    ?= chipyard.fpga.vcu118
+	GENERATOR_PACKAGE ?= chipyard
+	TB                ?= none # unused
+	TOP               ?= ChipTop
+	BOARD             ?= vcu118
+	FPGA_BRAND        ?= xilinx
+endif
+
 ifeq ($(SUB_PROJECT),nexysvideo)
 	SBT_PROJECT       ?= chipyard_fpga
 	MODEL             ?= NexysVideoHarness
@@ -87,6 +101,21 @@ ifeq ($(SUB_PROJECT),arty100t)
 	FPGA_BRAND        ?= xilinx
 endif
 
+ifeq ($(SUB_PROJECT),fmxcvu19p)
+	SBT_PROJECT       ?= chipyard_fpga
+	MODEL             ?= VelaFPGATestHarness
+	VLOG_MODEL        ?= VelaFPGATestHarness
+	MODEL_PACKAGE     ?= chipyard.fpga.fmxcvu19p
+	CONFIG            ?= VelaNormalTetst
+	CONFIG_PACKAGE    ?= chipyard.fpga.fmxcvu19p
+	GENERATOR_PACKAGE ?= chipyard
+	TB                ?= none # unused
+	TOP               ?= ChipTop
+	BOARD             ?= fmxcvu19p
+	FPGA_BRAND        ?= xilinx
+endif
+
+
 export USE_CHISEL6=1
 
 include $(base_dir)/variables.mk
@@ -129,6 +158,7 @@ all_vsrcs := \
 
 #########################################################################################
 # vivado rules
+# -bit-name "$(CONFIG)" added for changing bitstream name with CONFIG 20260518 hjkwon ETRI
 #########################################################################################
 # combine all sources into single .f
 synth_list_f := $(build_dir)/$(long_name).vsrcs.f
@@ -136,19 +166,22 @@ $(synth_list_f): $(sim_common_files) $(all_vsrcs)
 	$(foreach file,$(all_vsrcs),echo "$(file)" >> $@;)
 	cat $(sim_common_files) >> $@
 
-BIT_FILE := $(build_dir)/obj/$(MODEL).bit
-$(BIT_FILE): $(synth_list_f)
+#BIT_FILE := $(build_dir)/obj/$(MODEL).bit
+#$(BIT_FILE): $(synth_list_f)
+.PHONY: bitstream
+bitstream : $(synth_list_f)
 	cd $(build_dir); vivado \
-		-nojournal -mode batch \
+		-log vivado.log -nojournal -mode batch \
 		-source $(fpga_common_script_dir)/vivado.tcl \
 		-tclargs \
 			-top-module "$(MODEL)" \
+			-bit-name "$(CONFIG)" \
 			-F "$(synth_list_f)" \
 			-board "$(BOARD)" \
 			-ip-vivado-tcls "$(shell find '$(build_dir)' -name '*.vivado.tcl')"
 
-.PHONY: bitstream
-bitstream: $(BIT_FILE)
+#.PHONY: bitstream
+#bitstream: $(BIT_FILE)
 
 .PHONY: debug-bitstream
 debug-bitstream: $(build_dir)/obj/post_synth.dcp

@@ -1,0 +1,56 @@
+// See LICENSE for license details.
+//
+// Custom SimpleDevice subclasses that emit the xilinx_axienet driver "glue"
+// device-tree properties straight from elaboration -- so the Chipyard-generated
+// <config>.dts is already driver-ready and no manual overlay merge is needed.
+//
+// A stock SimpleDevice.describe() only emits compatible/reg/interrupts. These
+// override describe() (the same pattern as rocket-chip's SimpleBus) to append:
+//   dma@:       dma-coherent
+//   ethernet@:  phy-mode="sgmii", dma-coherent,
+//               axistream-connected/-control-connected = <&dma>  (phandle),
+//               phy-handle = <&phy>  + an mdio { phy@N { reg=<N>; } } subnode.
+//
+// Phandles use Device.label (rocket-chip labels every device node "L<n>"), and
+// ResourceMap(labels=...) puts a resolvable label on the phy subnode.
+package riscvvela
+
+import freechips.rocketchip.resources._
+
+/** AXI DMA node + coherency hint (FBUS->L2 coherent DMA). */
+class VelaEthDmaDtsDevice
+    extends SimpleDevice("dma", Seq("xlnx,axi-dma-1.00.a")) {
+  override def describe(resources: ResourceBindings): Description = {
+    val Description(name, mapping) = super.describe(resources)
+    Description(name, mapping ++ Map[String, Seq[ResourceValue]](
+      "dma-coherent" -> Seq()   // empty value -> emits `dma-coherent;`
+    ))
+  }
+}
+
+/** AXI 1G/2.5G Ethernet Subsystem node + the xilinx_axienet SGMII driver glue.
+  * @param dmaDev  the DMA device (for the axistream-connected phandle)
+  * @param phyAddr MDIO address of the PHY node
+  */
+class VelaEthMacDtsDevice(dmaDev: Device, phyAddr: Int = 1)
+    extends SimpleDevice("ethernet", Seq("xlnx,axi-ethernet-1.00.a")) {
+  override def describe(resources: ResourceBindings): Description = {
+    val Description(name, mapping) = super.describe(resources)
+    val phyLabel = "vela_eth_phy"
+    val extra: Map[String, Seq[ResourceValue]] = Map(
+      "phy-mode"                    -> Seq(ResourceString("sgmii")),
+      "dma-coherent"                -> Seq(),
+      "axistream-connected"         -> Seq(ResourceReference(dmaDev.label)),
+      "axistream-control-connected" -> Seq(ResourceReference(dmaDev.label)),
+      "phy-handle"                  -> Seq(ResourceReference(phyLabel)),
+      "mdio" -> Seq(ResourceMap(Map(
+        "#address-cells" -> Seq(ResourceInt(1)),
+        "#size-cells"    -> Seq(ResourceInt(0)),
+        s"phy@$phyAddr"  -> Seq(ResourceMap(
+          Map("reg" -> Seq(ResourceInt(phyAddr))),
+          labels = Seq(phyLabel)))
+      )))
+    )
+    Description(name, mapping ++ extra)
+  }
+}

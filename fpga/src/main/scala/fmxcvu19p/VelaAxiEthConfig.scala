@@ -1,0 +1,145 @@
+package chipyard.fpga.fmxcvu19p
+
+import org.chipsalliance.cde.config.Config
+
+import freechips.rocketchip.subsystem.{WithoutTLMonitors, WithNMemoryChannels, WithInclusiveCache, WithCoherentBusTopology}
+
+import velaEth.{WithVelaAxiEth, VelaAxiEthParams}
+
+// =============================================================================
+// FMXCVU19p configs using the Xilinx AXI 1G/2.5G Ethernet Subsystem + AXI DMA
+// (replaces IceNIC). See generators/velaeth/src/main/scala/VelaAxiEth.scala.
+//
+// Key differences vs. WithFMXCVU19PRJ45Tweaks (VelaEthConfig.scala):
+//   - NO `new WithEthernet` (i.e. no IceNIC / NICKey)
+//   - `new velaEth.WithVelaAxiEth` instantiates the AXI-Ethernet+DMA peripheral
+//   - `new chipyard.iobinders.WithVelaAxiEthAdapter` punches the SGMII pins
+//   - reuses the existing `WithEthernetPins` HarnessBinder for the RJ45 MGT
+// =============================================================================
+
+/** FMXCVU19P tweak chain with the AXI-Ethernet+DMA NIC */
+class WithFMXCVU19PAxiEthTweaks extends Config(
+  // clocking
+  new chipyard.harness.WithAllClocksFromHarnessClockInstantiator ++
+  new chipyard.clocking.WithPassthroughClockGenerator ++
+  new chipyard.config.WithUniformBusFrequencies(100) ++
+  new WithFPGAFrequency(100) ++
+  // harness binders
+  new WithUART ++
+  new WithSPISDCard ++
+  new WithDDRMem ++
+  new WithJTAG ++
+  // peripherals
+  new WithFMCSDPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++
+  new chipyard.config.WithTLBackingMemory ++
+  new WithSystemModifications ++
+  new chipyard.config.WithNoDebug ++
+  new WithoutTLMonitors ++
+  new WithNMemoryChannels(1)
+)
+
+/**
+ * Single Rocket core + Xilinx AXI-Ethernet(1G/2.5G) + AXI-DMA.
+ * Targets the mainline Linux `xilinx_axienet` driver (see vela-axi-eth.dtsi).
+ */
+class VelaAxiEthTestFMXCVU19P extends Config(
+  new WithFPGAFrequency(100) ++
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new WithVelaTestHarness ++                         // VelaFPGATestHarness (physical pins only)
+  new WithEthernetPins ++                            // reuse SGMII/RJ45 HarnessBinder
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  //
+  new WithInclusiveCache(nWays = 8, capacityKB = 512) ++
+  new WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+class VelaSaturnRocket1CoreDedicatedGemmini50MHz extends Config(
+  new WithFPGAFrequency(50) ++ // 90MHz: reduced from 100MHz to close timing on Gemmini paths
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  // 
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new velaVPU.rocket.WithRocketVectorUnit(512, 256, velaVPU.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+class TestkwonEdgeData256 extends Config(
+  new WithFPGAFrequency(50) ++ // 90MHz: reduced from 100MHz to close timing on Gemmini paths
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  //
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new freechips.rocketchip.subsystem.WithEdgeDataBits(256) ++
+  new velaVPU.rocket.WithRocketVectorUnit(512, 256, velaVPU.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+class VelaAxiEthTestFMXCVU19P50MHz extends Config(
+  new WithFPGAFrequency(50) ++
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new WithVelaTestHarness ++                         // VelaFPGATestHarness (physical pins only)
+  new WithEthernetPins ++                            // reuse SGMII/RJ45 HarnessBinder
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  //
+  new WithInclusiveCache(nWays = 8, capacityKB = 512) ++
+  new WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+class VelaSaturnRocket4CoreDedicatedGemmini50MHz extends Config(
+  new WithFPGAFrequency(50) ++
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new WithVelaTestHarness ++                         // VelaFPGATestHarness (physical pins only)
+  new WithEthernetPins ++                            // reuse SGMII/RJ45 HarnessBinder
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  //
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new WithMultiRoCCFPGAGemmini(0, 1, 2, 3)(                    // hart 0-3 each get a Gemmini
+    FPGAGemminiConfigs.fpgaConfig) ++
+  new velaVPU.rocket.WithRocketVectorUnit(512, 256, velaVPU.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)
+
+class VelaSaturnRocket4CorePooledGemmini50MHz extends Config(
+  new WithFPGAFrequency(50) ++
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new WithVelaTestHarness ++                         // VelaFPGATestHarness (physical pins only)
+  new WithEthernetPins ++                            // reuse SGMII/RJ45 HarnessBinder
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  //
+  new rerocc.WithReRoCC ++
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new velaVPU.rocket.WithRocketVectorUnit(512, 256, velaVPU.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)

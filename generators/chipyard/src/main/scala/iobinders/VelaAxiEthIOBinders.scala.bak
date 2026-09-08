@@ -1,0 +1,45 @@
+package chipyard.iobinders
+
+import chisel3._
+
+import riscvvela.CanHavePeripheryVelaAxiEth
+
+// EthernetIOBundle / EthernetPort are defined in chipyard.iobinders.Ports.
+// This binder punches the AXI-Ethernet peripheral's SGMII pins up to ChipTop
+// as an EthernetPort, so the existing VCU118 `WithEthernetPins` HarnessBinder
+// connects them to the RJ45 MGT exactly as it did for the IceNIC/XilinxEth path.
+
+/**
+ * WithVelaAxiEthPins - surface the Xilinx AXI-Ethernet SGMII pins at ChipTop.
+ *
+ * Unlike WithXilinxEthAdapter (which bridged IceNIC <-> a harness blackbox),
+ * the MAC + DMA now live inside DigitalTop as a diplomatic peripheral, so this
+ * binder only forwards physical pins — no packet/stream logic here.
+ */
+class WithVelaAxiEthPins extends OverrideIOBinder({
+  (system: CanHavePeripheryVelaAxiEth) => {
+    system.velaAxiEthSgmiiOpt.map { sgmii =>
+      val ethIO = IO(new EthernetIOBundle).suggestName("ethernet")
+
+      ethIO.sgmii_rxp.suggestName("ethernet_sgmii_rxp")
+      ethIO.sgmii_rxn.suggestName("ethernet_sgmii_rxn")
+      ethIO.sgmii_txp.suggestName("ethernet_sgmii_txp")
+      ethIO.sgmii_txn.suggestName("ethernet_sgmii_txn")
+
+      // ChipTop drives the peripheral's inputs; peripheral drives ChipTop outputs.
+      sgmii.gt_refclk_p := ethIO.eth_gt_refclk_p
+      sgmii.gt_refclk_n := ethIO.eth_gt_refclk_n
+      sgmii.sgmii_rxp   := ethIO.sgmii_rxp
+      sgmii.sgmii_rxn   := ethIO.sgmii_rxn
+
+      ethIO.sgmii_txp       := sgmii.sgmii_txp
+      ethIO.sgmii_txn       := sgmii.sgmii_txn
+      ethIO.link_up         := sgmii.link_up
+      ethIO.speed_is_100    := sgmii.speed_is_100
+      ethIO.speed_is_10_100 := sgmii.speed_is_10_100
+
+      println("[VelaAxiEth] WithVelaAxiEthPins: SGMII pins punched to ChipTop")
+      (Seq(EthernetPort(() => ethIO)), Nil)
+    }.getOrElse((Nil, Nil))
+  }
+})

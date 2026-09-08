@@ -87,6 +87,17 @@ def isolateAllTests(tests: Seq[TestDefinition]) = tests map { test =>
   new Group(test.name, Seq(test), SubProcess(options))
 } toSeq
 
+// Exclusive RISC-V-VELA compilation control
+val velaType     = sys.env.getOrElse("VELA_TYPE", "both").toLowerCase
+val useiVela      = velaType == "ivela"    || velaType == "both"
+
+
+// Print compilation mode info
+val _ = {
+  println(s"[INFO] RISC-V-VELA compilation mode: $velaType")
+  println(s"[INFO] - ivela : ${if(useiVela) "ENABLED" else "DISABLED"}")
+}
+
 
 lazy val chisel6Settings = Seq(
   libraryDependencies ++= Seq("org.chipsalliance" %% "chisel" % chisel6Version),
@@ -152,13 +163,14 @@ lazy val testchipip = (project in file("generators/testchipip"))
   .dependsOn(rocketchip, rocketchip_blocks)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val chipyard = (project in file("generators/chipyard"))
   .dependsOn(testchipip, rocketchip, boom, rocketchip_blocks, rocketchip_inclusive_cache,
     dsptools, rocket_dsp_utils,
     gemmini, icenet, tracegen, cva6, nvdla, sodor, ibex, fft_generator,
     constellation, mempress, barf, shuttle, caliptra_aes, rerocc,
-    compressacc, saturn, ara, firrtl2_bridge, vexiiriscv)
+    compressacc, saturn, ara, firrtl2_bridge, vexiiriscv, velaVPU, velaEth, velaNPU, ivela)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(
     libraryDependencies ++= Seq(
@@ -166,47 +178,64 @@ lazy val chipyard = (project in file("generators/chipyard"))
     )
   )
   .settings(commonSettings)
+  .settings(chiselSettings)
   .settings(Compile / unmanagedSourceDirectories += file("tools/stage/src/main/scala"))
+  .settings(
+    // Exclude files that depend on disabled projects
+//    Compile / sources := {
+//      var srcs = (Compile / sources).value
+//      if (!useNPU)       srcs = srcs.filterNot(_.getName == "VelaNPUConfig.scala")
+//      srcs
+//    }
+  )
 
 lazy val compressacc = (project in file("generators/compress-acc"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val mempress = (project in file("generators/mempress"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val barf = (project in file("generators/bar-fetchers"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val saturn = (project in file("generators/saturn"))
-  .dependsOn(rocketchip, shuttle)
-  .settings(libraryDependencies ++= rocketLibDeps.value)
-  .settings(commonSettings)
+    .dependsOn(rocketchip, shuttle)
+    .settings(libraryDependencies ++= rocketLibDeps.value)
+    .settings(commonSettings)
+    .settings(chiselSettings)
 
 lazy val constellation = (project in file("generators/constellation"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val fft_generator = (project in file("generators/fft-generator"))
   .dependsOn(rocketchip, rocket_dsp_utils)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val tracegen = (project in file("generators/tracegen"))
   .dependsOn(testchipip, rocketchip, rocketchip_inclusive_cache, boom)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val icenet = (project in file("generators/icenet"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val boom = freshProject("boom", file("generators/boom"))
   .dependsOn(rocketchip)
@@ -217,56 +246,66 @@ lazy val shuttle = (project in file("generators/shuttle"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val cva6 = (project in file("generators/cva6"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
-
+  .settings(chiselSettings)
 lazy val ara = (project in file("generators/ara"))
   .dependsOn(rocketchip, shuttle)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val ibex = (project in file("generators/ibex"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val vexiiriscv = (project in file("generators/vexiiriscv"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val sodor = (project in file("generators/riscv-sodor"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val gemmini = freshProject("gemmini", file("generators/gemmini"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
 
+
 lazy val nvdla = (project in file("generators/nvdla"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val caliptra_aes = (project in file("generators/caliptra-aes-acc"))
   .dependsOn(rocketchip, rocc_acc_utils, testchipip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val rerocc = (project in file("generators/rerocc"))
   .dependsOn(rocketchip, constellation, boom, shuttle)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val rocc_acc_utils = (project in file("generators/rocc-acc-utils"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val tapeout = (project in file("./tools/tapeout/"))
   .settings(chisel3Settings) // stuck on chisel3 and SFC
@@ -277,6 +316,7 @@ lazy val tapeout = (project in file("./tools/tapeout/"))
 lazy val fixedpoint = freshProject("fixedpoint", file("./tools/fixedpoint"))
   .settings(chiselSettings)
   .settings(commonSettings)
+
 
 lazy val dsptools = freshProject("dsptools", file("./tools/dsptools"))
   .dependsOn(fixedpoint)
@@ -300,27 +340,41 @@ lazy val rocket_dsp_utils = freshProject("rocket-dsp-utils", file("./tools/rocke
   .dependsOn(rocketchip, cde, dsptools)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val rocketchip_blocks = (project in file("generators/rocket-chip-blocks"))
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val rocketchip_inclusive_cache = (project in file("generators/rocket-chip-inclusive-cache"))
   .settings(
     commonSettings,
+    chiselSettings,
     Compile / scalaSource := baseDirectory.value / "design/craft")
   .dependsOn(rocketchip)
   .settings(libraryDependencies ++= rocketLibDeps.value)
 
 lazy val fpga_shells = (project in file("./fpga/fpga-shells"))
-  .dependsOn(rocketchip, rocketchip_blocks)
+  .dependsOn(rocketchip, rocketchip_blocks, velaVPU, velaEth, velaNPU, ivela)
   .settings(libraryDependencies ++= rocketLibDeps.value)
   .settings(commonSettings)
+  .settings(chiselSettings)
 
 lazy val chipyard_fpga = (project in file("./fpga"))
   .dependsOn(chipyard, fpga_shells)
   .settings(commonSettings)
+  .settings(chiselSettings)
+  .settings(
+//    Compile / sources := {
+//      var srcs = (Compile / sources).value
+//      if (!useNPU)       srcs = srcs.filterNot(f => Set("FPGAGemminiConfig.scala",
+//                                                         "ReRoCCGemminiNPUConfig.scala").contains(f.getName) ||
+//                                                     f.getName == "VelaEthNPUConfig.scala")
+//      srcs
+//    }
+  )
 
 // Components of FireSim
 
@@ -408,3 +462,29 @@ lazy val firechip = (project in file("generators/firechip/chip"))
     Test / testOptions += Tests.Argument("-oF")
   )
   .settings(scalaTestSettings)
+
+// Always define projects, but make them dummy projects when disabled
+
+lazy val velaEth = (project in file("generators/velaEth"))
+    .dependsOn(rocketchip, rocketchip_blocks, testchipip)
+    .settings(libraryDependencies ++= rocketLibDeps.value)
+    .settings(commonSettings)
+    .settings(chiselSettings)
+
+lazy val velaVPU = (project in file("generators/velaVPU"))
+    .dependsOn(rocketchip, rocketchip_blocks, velaEth, shuttle)
+    .settings(libraryDependencies ++= rocketLibDeps.value)
+    .settings(commonSettings)
+    .settings(chiselSettings)
+
+lazy val velaNPU = (project in file("generators/velaNPU"))
+    .dependsOn(rocketchip, rocketchip_blocks, testchipip, velaEth, hardfloat)
+    .settings(libraryDependencies ++= rocketLibDeps.value)
+    .settings(commonSettings)
+    .settings(chiselSettings)
+
+lazy val ivela = (project in file("generators/ivela"))
+    .dependsOn(rocketchip, rocketchip_blocks, testchipip, velaEth, velaNPU, velaVPU, hardfloat)
+    .settings(libraryDependencies ++= rocketLibDeps.value)
+    .settings(commonSettings)
+    .settings(chiselSettings)

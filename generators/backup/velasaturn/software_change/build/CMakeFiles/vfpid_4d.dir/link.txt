@@ -1,0 +1,1 @@
+riscv64-unknown-linux-gnu-gcc -O3 -DNDEBUG -static -Wl,-u,_printf_float CMakeFiles/vfpid_4d.dir/vfpid_4d.c.o -o vfpid_4d.riscv 

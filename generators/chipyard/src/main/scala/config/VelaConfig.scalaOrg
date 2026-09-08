@@ -1,0 +1,11 @@
+package chipyard
+
+import org.chipsalliance.cde.config.{Config}
+
+
+class VelaNormalTest extends Config(
+  new gemmini.DefaultGemminiConfig ++                               // use Gemmini systolic array GEMM accelerator
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+

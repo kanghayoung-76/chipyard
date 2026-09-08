@@ -1,0 +1,64 @@
+# =============================================================================
+# eth_rx_debug.xdc -- DIAGNOSTIC ONLY. Mark the RX chain for ILA capture.
+#
+# Traces a received frame from the SGMII pins to the AXI DMA, in order, so the
+# stage where data stops is visible. Add to the project before synthesis, then
+# run "Set Up Debug" (or create_debug_core) on the marked nets.
+#
+# TWO CLOCK DOMAINS -> TWO ILA CORES. Do not mix them in one core:
+#   group A (stages 1-3): mac_rx_mac_aclk, 125 MHz, recovered from SGMII
+#   group B (stages 4-6): axi_aclk, 100 MHz (or 50 MHz in the 50MHz build)
+# =============================================================================
+
+# ---- group A : 125 MHz RX domain -------------------------------------------
+
+# Stage 1. PCS/PMA status. The single most informative probe in the whole chain.
+#   [0] link status      [1] sync         [2] RUDI(/C/)   [3] RUDI(/I/)
+#   [4] RUDI(INVALID)    [5] RXDISPERR    [6] RXNOTINTABLE
+#   [7] PHY link status  [11:10] speed    [12] duplex
+# Bits 5 and 6 are 8B/10B decode errors: if they ever pulse, the SGMII receive
+# path has bit errors and nothing downstream can be trusted.
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*pcs_pma_status_vector_0*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*rx_locked*"}]
+
+# Stage 2. GMII, PCS -> TEMAC. RX_DV asserts for every received frame.
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_gmii_RX_DV*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_gmii_RX_ER*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_gmii_RXD*"}]
+
+# Stage 3. TEMAC -> buffer, 8-bit AXIS. TUSER asserted with TLAST marks a BAD
+# frame (bad FCS, too short, overrun) -- the buffer then discards it, which
+# would explain frames arriving but never reaching the DMA.
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_m_axis_rx_TVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_m_axis_rx_TLAST*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_m_axis_rx_TUSER*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_rx_statistics_valid*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_rx_statistics_vector*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*mac_rx_reset*"}]
+
+# ---- group B : axi_aclk domain ---------------------------------------------
+
+# Stage 4/5. Buffer -> DMA data stream. This is where you already see
+# TVALID stuck high; TREADY is the signal that decides the diagnosis.
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxd_TVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxd_TREADY*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxd_TLAST*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxd_TKEEP*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxd_TDATA*"}]
+
+# Status stream. rxs_TVALID tells you whether the MAC ever completed a frame.
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxs_TVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxs_TREADY*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_ethernet_0_m_axis_rxs_TLAST*"}]
+
+# Stream resets -- if either is low the interface is held off regardless.
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_rxd_arstn*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_rxs_arstn*"}]
+
+# Stage 6. DMA memory side: does S2MM ever attempt a write, and does SG fetch?
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_dma_0_M_AXI_S2MM_AWVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_dma_0_M_AXI_S2MM_AWREADY*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_dma_0_M_AXI_S2MM_WVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_dma_0_M_AXI_S2MM_BVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_dma_0_M_AXI_SG_ARVALID*"}]
+set_property MARK_DEBUG true [get_nets -hier -filter {NAME =~ "*axi_dma_0_M_AXI_SG_RVALID*"}]

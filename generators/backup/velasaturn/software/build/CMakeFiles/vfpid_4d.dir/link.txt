@@ -1,0 +1,1 @@
+riscv64-unknown-elf-gcc -g -static -specs=htif_nano.specs -T htif.ld -Wl,-u,_printf_float CMakeFiles/vfpid_4d.dir/vfpid_4d.c.o -o vfpid_4d.riscv 

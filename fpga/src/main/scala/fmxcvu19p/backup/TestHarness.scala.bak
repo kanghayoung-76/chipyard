@@ -1,0 +1,166 @@
+package chipyard.fpga.fmxcvu19p
+
+import chisel3._
+
+import freechips.rocketchip.diplomacy.{LazyModule, LazyRawModuleImp, BundleBridgeSource}
+import org.chipsalliance.cde.config.{Parameters}
+import freechips.rocketchip.tilelink._
+import freechips.rocketchip.diplomacy.{IdRange, TransferSizes}
+import freechips.rocketchip.subsystem.{SystemBusKey}
+import freechips.rocketchip.prci._
+import sifive.fpgashells.shell.xilinx._
+import sifive.fpgashells.ip.xilinx.{IBUF, PowerOnResetFPGAOnly}
+import sifive.fpgashells.shell._
+import sifive.fpgashells.clocks._
+
+import sifive.blocks.devices.uart.{PeripheryUARTKey, UARTPortIO}
+import sifive.blocks.devices.spi.{PeripherySPIKey, SPIPortIO}
+
+import chipyard._
+import chipyard.harness._
+
+class FMXCVU19PFPGATestHarness(override implicit val p: Parameters) extends FMXCVU19PShellBasicOverlays {
+
+  def dp = designParameters
+
+  val num_of_memory = p(NUMOFMEMORY) == "2"
+  val pmod_is_sdio  = p(FMXCVU19PShellPMOD) == "SDIO"
+  val sd_on_fmc     = p(FMXCVU19PShellSDLocation) == "FMC"  // SD card on FMC HPC1 (J2) via TB-FMCL-PH
+  // When using FMC for SD, JTAG can use PMOD J52; otherwise depends on PMOD SDIO setting
+  val jtag_location = Some(if (sd_on_fmc) "PMOD_J52" else if (pmod_is_sdio) "FMC_J2" else "PMOD_J52")
+
+  // Order matters; ddr depends on sys_clock
+  val uart      = Overlay(UARTOverlayKey, new UARTFMXCVU19PShellPlacer(this, UARTShellInput()))
+
+  // SD card overlay: use FMC if configured, otherwise use PMOD if pmod_is_sdio
+  val sdio      = if (sd_on_fmc) {
+    Some(Overlay(SPIOverlayKey, new SDIOFMCFMXCVU19PShellPlacer(this, SPIShellInput())))
+  } else if (pmod_is_sdio) {
+    Some(Overlay(SPIOverlayKey, new SDIOFMXCVU19PShellPlacer(this, SPIShellInput())))
+  } else None
+  val jtag      = Overlay(JTAGDebugOverlayKey, new JTAGDebugFMXCVU19PShellPlacer(this, JTAGDebugShellInput(location = jtag_location)))
+  val cjtag     = Overlay(cJTAGDebugOverlayKey, new cJTAGDebugFMXCVU19PShellPlacer(this, cJTAGDebugShellInput()))
+  val jtagBScan = Overlay(JTAGDebugBScanOverlayKey, new JTAGDebugBScanFMXCVU19PShellPlacer(this, JTAGDebugBScanShellInput()))
+  val fmc       = Overlay(PCIeOverlayKey, new PCIeFMXCVU19PFMCShellPlacer(this, PCIeShellInput()))
+  val edge      = Overlay(PCIeOverlayKey, new PCIeFMXCVU19PEdgeShellPlacer(this, PCIeShellInput()))
+  val sys_clock2 = Overlay(ClockInputOverlayKey, new SysClock2FMXCVU19PShellPlacer(this, ClockInputShellInput()))
+//  val ddr2       = Overlay(DDROverlayKey, new DDR2FMXCVU19PShellPlacer(this, DDRShellInput()))
+
+// DOC include start: ClockOverlay
+  // place all clocks in the shell
+  // After prepend reorder: [sys_clock2, sys_clock3, sys_clock, ref_clock]
+  // Each place() filters the placed overlay, so index 0 shifts to the next unplaced clock
+  require(dp(ClockInputOverlayKey).size >= 1)
+  val sysClkNode = dp(ClockInputOverlayKey)(0).place(ClockInputDesignInput()).overlayOutput.node // sys_clock2 (AW26/AW27, PLL source)
+  
+  // Always place both MIG reference clocks so their requires pass regardless of num_of_memory.
+  // DDRTA0 uses sys_clock (K9/K8); DDRTA1 uses sys_clock3 (BP16/BP15).
+  // DDRTA1 is placed only when num_of_memory=true (NUMOFMEMORY=="2").
+  val sysClk3Node = dp(ClockInputOverlayKey)(0).place(ClockInputDesignInput()).overlayOutput.node // sys_clock3 (BP16/BP15)
+  val sysClk3Sink = ClockSinkNode(Seq(ClockSinkParameters()))
+  sysClk3Sink := sysClk3Node
+
+  val sysClk1Node = dp(ClockInputOverlayKey)(0).place(ClockInputDesignInput()).overlayOutput.node // sys_clock (K9/K8)
+  val sysClk1Sink = ClockSinkNode(Seq(ClockSinkParameters()))
+  sysClk1Sink := sysClk1Node
+
+  /*** Connect/Generate clocks ***/
+
+  // connect to the PLL that will generate multiple clocks
+  val harnessSysPLL = dp(PLLFactoryKey)()
+  harnessSysPLL := sysClkNode
+
+  // create and connect to the dutClock
+  val dutFreqMHz = (dp(SystemBusKey).dtsFrequency.get / (1000 * 1000)).toInt
+  val dutClock = ClockSinkNode(freqMHz = dutFreqMHz)
+  println(s"FMXCVU19P FPGA Base Clock Freq: ${dutFreqMHz} MHz")
+  val dutWrangler = LazyModule(new ResetWrangler)
+  val dutGroup = ClockGroup()
+  dutClock := dutWrangler.node := dutGroup := harnessSysPLL
+// DOC include end: ClockOverlay
+
+  /*** UART ***/
+
+// DOC include start: UartOverlay
+  // 1st UART goes to the FMXCVU19P dedicated UART
+
+  val io_uart_bb = BundleBridgeSource(() => (new UARTPortIO(dp(PeripheryUARTKey).head)))
+  dp(UARTOverlayKey).head.place(UARTDesignInput(io_uart_bb))
+// DOC include end: UartOverlay
+
+  /*** SPI ***/
+
+  // 1st SPI goes to the FMXCVU19P SDIO port
+
+  val io_spi_bb = BundleBridgeSource(() => (new SPIPortIO(dp(PeripherySPIKey).head)))
+  dp(SPIOverlayKey).head.place(SPIDesignInput(dp(PeripherySPIKey).head, io_spi_bb))
+
+  /*** DDR ***/
+  val size = p(FMXCVU19PDDRSize) // 18GB
+  // DDR prepend order: [ddrta0, ddrta1]. After placing index 0, list shifts so ddrta1 becomes index 0.
+  val ddrNodeTA0 = dp(DDROverlayKey)(0).place(DDRDesignInput(dp(ExtTLMem).get.master.base, dutWrangler.node, harnessSysPLL)).overlayOutput.ddr
+
+  // connect 1 mem. channel to the FPGA DDR
+  val ddrClientTA0 = TLClientNode(Seq(TLMasterPortParameters.v1(Seq(TLMasterParameters.v1(
+    name = "chip_ddrTA0",
+    sourceId = IdRange(0, 1 << dp(ExtTLMem).get.master.idBits)
+  )))))
+
+  ddrNodeTA0 := TLWidthWidget(dp(ExtTLMem).get.master.beatBytes) := ddrClientTA0
+
+
+  val ddrClientTA1: Option[TLClientNode] = if(num_of_memory) {
+      val ddrNodeTA1 = dp(DDROverlayKey)(0).place(DDRDesignInput(dp(ExtTLMem).get.master.base, dutWrangler.node, harnessSysPLL)).overlayOutput.ddr
+      val client = TLClientNode(Seq(TLMasterPortParameters.v1(Seq(TLMasterParameters.v1(
+        name = "chip_ddrTA1",
+        sourceId = IdRange(0, 1 << dp(ExtTLMem).get.master.idBits)
+      )))))
+      ddrNodeTA1 := TLWidthWidget(dp(ExtTLMem).get.master.beatBytes) := client
+      Some(client)
+  } else None
+
+  /*** JTAG ***/
+  val jtagPlacedOverlay = dp(JTAGDebugOverlayKey).head.place(JTAGDebugDesignInput())
+
+  // module implementation
+  override lazy val module = new FMXCVU19PFPGATestHarnessImp(this)
+}
+
+class FMXCVU19PFPGATestHarnessImp(_outer: FMXCVU19PFPGATestHarness) extends LazyRawModuleImp(_outer) with HasHarnessInstantiators {
+  override def provideImplicitClockToLazyChildren = true
+  val fmxcvu19pOuter = _outer
+
+  val reset = IO(Input(Bool())).suggestName("reset")
+  _outer.xdc.addPackagePin(reset, "AU63") // ta1.ta0 Button2 // Not BITSLICE
+  _outer.xdc.addIOStandard(reset, "LVCMOS12")
+
+  val resetIBUF = Module(new IBUF)
+  resetIBUF.io.I := reset
+
+  val sysclk: Clock = _outer.sysClkNode.out.head._1.clock
+
+  val powerOnReset: Bool = PowerOnResetFPGAOnly(sysclk)
+  _outer.sdc.addAsyncPath(Seq(powerOnReset))
+
+//  val ereset: Bool = _outer.chiplink.get() match {
+//    case Some(x: ChipLinkFMXCVU19PPlacedOverlay) => !x.ereset_n
+//    case _ => false.B
+//  }
+
+  //_outer.pllReset := (resetIBUF.io.O || powerOnReset || ereset)
+  _outer.pllReset := (resetIBUF.io.O || powerOnReset)
+
+  // reset setup
+  val hReset = Wire(Reset())
+  hReset := _outer.dutClock.in.head._1.reset
+
+  def referenceClockFreqMHz = _outer.dutFreqMHz
+  def referenceClock = _outer.dutClock.in.head._1.clock
+  def referenceReset = hReset
+  def success = { require(false, "Unused"); false.B }
+
+  childClock := referenceClock
+  childReset := referenceReset
+
+  instantiateChipTops()
+}

@@ -1,0 +1,240 @@
+package chipyard.fpga.fmxcvu19p
+
+import org.chipsalliance.cde.config.{Config}
+import rerocc._
+
+import freechips.rocketchip.tile.OpcodeSet   // ← add this import // Custom OpCode
+
+class VelaETHTest extends Config(
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++                  // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithFMXCVU19PRJ45Tweaks ++              // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++                     // HarnessBinder for Ethernet/SGMII pins
+  new chipyard.iobinders.WithXilinxEthAdapter ++  // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  Rocket Core + Gemmini(with Pipeline in PE)
+ *  default 2 Mig
+**/
+class VelaRocketHugeGemmini extends Config(
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++                  // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithFMXCVU19PRJ45Tweaks ++              // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++  // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  2 Rocket Core + 2 Gemmini(with Pipeline in PE)
+ *  default 2 Mig
+**/
+/*-------------------------------------------------------------------------------------*/
+/*-------------------------------------------------------------------------------------*/
+/*-------------------------------------------------------------------------------------*/
+/*-------------------------------------------------------------------------------------*/
+/*
+// Single RocketCore with 4 dedicated Gemminis (maximum — one per custom opcode)
+class VelaRocketSingleCoreMultiGemmini extends Config(
+  new FPGAGemminiConfig(FPGAGemminiConfigs.fpgaConfig.copy(
+    opcodes = OpcodeSet.custom0)) ++          // Gemmini 0
+  new FPGAGemminiConfig(FPGAGemminiConfigs.fpgaConfig.copy(
+    opcodes = OpcodeSet.custom1)) ++          // Gemmini 1
+  new FPGAGemminiConfig(FPGAGemminiConfigs.fpgaConfig.copy(
+    opcodes = OpcodeSet.custom2)) ++          // Gemmini 2
+  new FPGAGemminiConfig(FPGAGemminiConfigs.fpgaConfig.copy(
+    opcodes = OpcodeSet.custom3)) ++          // Gemmini 3
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+// 4 RocketCore with 4 dedicated Gemminis (each Rocketcore has Single Gemmini)
+class VelaRocket4CoreDedicatedGemmini extends Config(
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new WithMultiRoCCFPGAGemmini(0, 1, 2, 3)(                    // hart 0-3 each get a Gemmini
+    FPGAGemminiConfigs.fpgaConfig) ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)
+
+// 4 RocketCore with 4 dedicated Saturn (each Rocketcore has Single Saturn)
+class VelaRocket4CoreDedicatedSaturn extends Config(
+  // cores=None (default) → every tile automatically gets its own Saturn instance
+  new saturn.rocket.WithRocketVectorUnit(
+    vLen   = 512,
+    dLen   = 128,
+    params = saturn.common.VectorParams.refParams) ++
+  new chipyard.config.WithSystemBusWidth(128) ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)
+
+// 4 RocketCore with 4 dedicated Gemmini and Saturn (each Rocketcore has Single Saturn and Single Gemmini)
+class VelaRocket4CoreEachTileDeicatedGemminiSaturn extends Config(
+  // Each tile: 1 RocketCore + 1 Saturn (RVV) + 1 Gemmini (RoCC)
+  new chipyard.config.WithMultiRoCC ++
+  new chipyard.config.WithMultiRoCCGemmini(0, 1, 2, 3)(FPGAGemminiConfigs.fpgaConfig) ++
+  new saturn.rocket.WithRocketVectorUnit(256, 128, VectorParams.refParams) ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)
+
+*/
+/*-------------------------------------------------------------------------------------*/
+/*-------------------------------------------------------------------------------------*/
+/*-------------------------------------------------------------------------------------*/
+// 8 RocketCore with 8 dedicated Gemminis (each Rocketcore has Single Gemmini)
+class VelaRocket8CoreDedicatedGemmini extends Config(
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new WithMultiRoCCFPGAGemmini(0, 1, 2, 3, 4, 5, 6, 7)(         // hart 0-7 each get a Gemmini
+    FPGAGemminiConfigs.fpgaConfig) ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(8) ++
+  new chipyard.config.AbstractConfig)
+
+/*-------------------------------------------------------------------------------------*/
+// 1 RocketCore with 1 dedicated Gemminis (each Rocketcore has Single Gemmini)
+class VelaSaturnRocket1CoreDedicatedGemmini extends Config(
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new velasaturn.rocket.WithRocketVectorUnit(512, 256, velasaturn.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+/*-------------------------------------------------------------------------------------*/
+// TEMPORARY: pure duplicate of VelaSaturnRocket1CoreDedicatedGemmini, used only for a
+// controlled A/B test isolating whether pblock_vu/vfu/vmu helps or hurts (holding
+// place/route directive constant). Builds into its own directory so it doesn't touch
+// any project the user may be using interactively. Safe to delete once the test is done.
+class VelaSaturnRocket1CoreDedicatedGemminiABTest extends Config(
+  new FPGAGemminiConfig ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new velasaturn.rocket.WithRocketVectorUnit(512, 256, velasaturn.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+/*-------------------------------------------------------------------------------------*/
+// 4 RocketCore with 4 dedicated Gemminis (each Rocketcore has Single Gemmini)
+class VelaSaturnRocket4CoreDedicatedGemmini extends Config(
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new WithMultiRoCCFPGAGemmini(0, 1, 2, 3)(                    // hart 0-3 each get a Gemmini
+    FPGAGemminiConfigs.fpgaConfig) ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new velasaturn.rocket.WithRocketVectorUnit(512, 256, velasaturn.common.VectorParams.refParams) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)
+
+class VelaRocket4CoreDedicatedGemmini extends Config(
+  new chipyard.config.WithMultiRoCC ++                          // per-tile RoCC dispatch
+  new WithMultiRoCCFPGAGemmini(0, 1, 2, 3)(                    // hart 0-3 each get a Gemmini
+    FPGAGemminiConfigs.fpgaConfig) ++
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithFMXCVU19PRJ45Tweaks ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++
+  new chipyard.config.AbstractConfig)
+/**
+ *  Rocket Core + Pool Gemmini(with Pipeline in PE)
+ *  default 2 Mig
+**/
+class VelaRocketHugePoolGemmini extends Config(
+  new rerocc.WithReRoCC ++
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+//  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++                  // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithFMXCVU19PRJ45Tweaks ++              // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++  // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(2) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  4 Rocket Core + 4 Gemmini + Pool Gemmini(with Pipeline in PE)
+ *  default 2 Mig
+**/
+class VelaRocketHugePoolGemmini4 extends Config(
+  new rerocc.WithReRoCC ++
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++                  // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithFMXCVU19PRJ45Tweaks ++              // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++  // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(4) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig)
+
+/**
+ *  Boom Core + GemminiNPU
+ *  default 2 Mig
+**/
+class VelaBoomMediumGemmini extends Config(
+  new gemmininpu.DefaultGemminiConfig ++
+  new WithVelaTestHarness ++                  // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new WithFMXCVU19PRJ45Tweaks ++              // Use RJ45 tweaks instead of regular tweaks
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithXilinxEthAdapter ++  // Override WithNICIOPunchthrough - connects IceNIC to XilinxEth SGMII/RJ45
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new boom.v3.common.WithNMediumBooms(1) ++
+  new chipyard.config.AbstractConfig)

@@ -1,0 +1,91 @@
+package chipyard.fpga.fmxcvu19p
+
+import org.chipsalliance.cde.config.Config
+
+import freechips.rocketchip.subsystem.{WithoutTLMonitors, WithNMemoryChannels, WithInclusiveCache, WithCoherentBusTopology}
+
+import riscvvela.{WithVelaAxiEth, VelaAxiEthParams}
+
+// =============================================================================
+// FMXCVU19p configs using the Xilinx AXI 1G/2.5G Ethernet Subsystem + AXI DMA
+// (replaces IceNIC). See generators/velaeth/src/main/scala/VelaAxiEth.scala.
+//
+// Key differences vs. WithFMXCVU19PRJ45Tweaks (VelaEthConfig.scala):
+//   - NO `new WithEthernet` (i.e. no IceNIC / NICKey)
+//   - `new riscvvela.WithVelaAxiEth` instantiates the AXI-Ethernet+DMA peripheral
+//   - `new chipyard.iobinders.WithVelaAxiEthAdapter` punches the SGMII pins
+//   - reuses the existing `WithEthernetPins` HarnessBinder for the RJ45 MGT
+// =============================================================================
+
+/** FMXCVU19P tweak chain with the AXI-Ethernet+DMA NIC */
+class WithFMXCVU19PAxiEthTweaks extends Config(
+  // clocking
+  new chipyard.harness.WithAllClocksFromHarnessClockInstantiator ++
+  new chipyard.clocking.WithPassthroughClockGenerator ++
+  new chipyard.config.WithUniformBusFrequencies(100) ++
+  new WithFPGAFrequency(100) ++
+  // harness binders
+  new WithUART ++
+  new WithSPISDCard ++
+  new WithDDRMem ++
+  new WithJTAG ++
+  // peripherals
+  new WithFMCSDPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++
+  new chipyard.config.WithTLBackingMemory ++
+  new WithSystemModifications ++
+  new chipyard.config.WithNoDebug ++
+  new WithoutTLMonitors ++
+  new WithNMemoryChannels(1)
+)
+
+/**
+ * Single Rocket core + Xilinx AXI-Ethernet(1G/2.5G) + AXI-DMA.
+ * Targets the mainline Linux `xilinx_axienet` driver (see vela-axi-eth.dtsi).
+ */
+class VelaAxiEthTestFMXCVU19P extends Config(
+  new WithFPGAFrequency(100) ++
+  new WithVelaTestHarness ++                         // VelaFPGATestHarness (physical pins only)
+  new WithFMXCVU19PAxiEthTweaks ++
+  new WithEthernetPins ++                            // reuse SGMII/RJ45 HarnessBinder
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  //
+  new WithInclusiveCache(nWays = 8, capacityKB = 512) ++
+  new WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+class Testkwon extends Config(
+  new WithFPGAFrequency(50) ++ // 90MHz: reduced from 100MHz to close timing on Gemmini paths
+  new WithFMXCVU19PAxiEthTweaks ++
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  new velasaturn.rocket.WithRocketVectorUnit(512, 256, velasaturn.common.VectorParams.refParams) ++
+  new chipyard.config.WithSystemBusWidth(512) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+
+class Testkwon256 extends Config(
+  new WithFPGAFrequency(50) ++ // 90MHz: reduced from 100MHz to close timing on Gemmini paths
+  new WithFMXCVU19PAxiEthTweaks ++
+  new FPGAGemminiConfig ++                    // FPGA-optimized Gemmini with increased pipeline latency
+  new WithNumofMemory ++
+  new WithVelaTestHarness ++
+  new WithEthernetPins ++
+  new chipyard.iobinders.WithVelaAxiEthAdapter ++       // punch peripheral SGMII to ChipTop
+  new WithVelaAxiEth() ++                            // instantiate AXI-Ethernet + AXI-DMA peripheral
+  new velasaturn.rocket.WithRocketVectorUnit(512, 256, velasaturn.common.VectorParams.refParams) ++
+  new chipyard.config.WithSystemBusWidth(256) ++
+  new freechips.rocketchip.subsystem.WithInclusiveCache(nWays=8, capacityKB=512) ++
+  new freechips.rocketchip.subsystem.WithCoherentBusTopology ++
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++
+  new chipyard.config.AbstractConfig)
+

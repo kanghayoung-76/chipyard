@@ -316,7 +316,7 @@ run-binary: check-binary $(BINARY).run
 run-binaries: check-binaries $(addsuffix .run,$(BINARIES))
 
 %.run: %.check-exists $(SIM_PREREQ) | $(output_dir)
-	(set -o pipefail && $(NUMA_PREFIX) $(sim) \
+	(set -o pipefail && ulimit -s unlimited && $(NUMA_PREFIX) $(sim) \
 		$(PERMISSIVE_ON) \
 		$(call get_common_sim_flags,$*) \
 		$(VERBOSE_FLAGS) \
@@ -330,7 +330,7 @@ run-binary-fast: check-binary $(BINARY).run.fast
 run-binaries-fast: check-binaries $(addsuffix .run.fast,$(BINARIES))
 
 %.run.fast: %.check-exists $(SIM_PREREQ) | $(output_dir)
-	(set -o pipefail && $(NUMA_PREFIX) $(sim) \
+	(set -o pipefail && ulimit -s unlimited && $(NUMA_PREFIX) $(sim) \
 		$(PERMISSIVE_ON) \
 		$(call get_common_sim_flags,$*) \
 		$(PERMISSIVE_OFF) \
@@ -346,7 +346,7 @@ run-binaries-debug: check-binaries $(addsuffix .run.debug,$(BINARIES))
 ifeq (1,$(DUMP_BINARY))
 	if [ "$*" != "none" ]; then riscv64-unknown-elf-objdump -D -S $* > $(call get_sim_out_name,$*).dump ; fi
 endif
-	(set -o pipefail && $(NUMA_PREFIX) $(sim_debug) \
+	(set -o pipefail && ulimit -s unlimited && $(NUMA_PREFIX) $(sim_debug) \
 		$(PERMISSIVE_ON) \
 		$(call get_common_sim_flags,$*) \
 		$(VERBOSE_FLAGS) \

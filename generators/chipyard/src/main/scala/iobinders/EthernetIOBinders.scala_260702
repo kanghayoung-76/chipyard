@@ -1,0 +1,111 @@
+package chipyard.iobinders
+
+import chisel3._
+import chisel3.util.Queue
+
+import testchipip.serdes.StreamChannel
+import icenet.{CanHavePeripheryIceNIC}
+
+import chipyard.iobinders.IOBinderTypes._
+
+// Import XilinxEthBlackBox from omnixtendeth generator (only available when OMNI_TYPE=ethernet or both)
+// EthernetIOBundle and EthernetPort are defined in chipyard.iobinders.Ports (same package)
+import riscvvela.XilinxEthBlackBox
+
+/**
+ * WithXilinxEthAdapter - Connects IceNIC to SGMII/RJ45 via Xilinx Ethernet IP
+ *
+ * This IOBinder handles the RJ45 1G Ethernet path separately from OmniXtend (QSFP 10G).
+ * It uses OverrideIOBinder to completely handle NIC (doesn't create separate NIC IOs).
+ *
+ * This file is only compiled when OMNI_TYPE=ethernet or OMNI_TYPE=both.
+ * For DMA-only builds, this file is excluded from compilation.
+ *
+ * Usage in config:
+ *   new chipyard.iobinders.WithXilinxEthAdapter ++
+ */
+class WithXilinxEthAdapter extends OverrideIOBinder({
+  (system: CanHavePeripheryIceNIC) => {
+    system.icenicOpt.map { icenic =>
+      println("[DEBUG] WithXilinxEthAdapter: Connecting IceNIC to XilinxEth for RJ45")
+
+      // Create Ethernet/SGMII bundle at ChipTop level (outside clock domain)
+      val ethIO = IO(new EthernetIOBundle).suggestName("ethernet")
+
+      // Explicitly name each SGMII signal to prevent _T_* temporaries
+      ethIO.sgmii_rxp.suggestName("ethernet_sgmii_rxp")
+      ethIO.sgmii_rxn.suggestName("ethernet_sgmii_rxn")
+      ethIO.sgmii_txp.suggestName("ethernet_sgmii_txp")
+      ethIO.sgmii_txn.suggestName("ethernet_sgmii_txn")
+
+      // withClockAndReset is required to supply Chisel's implicit clock for
+      // Queue register elaboration.  icenic.clock is the PBUS/system clock
+      // (100 MHz via WithUniformBusFrequencies + WithPassthroughClockGenerator),
+      // so the Queues and BlackBox are effectively on the system clock domain.
+      // The 2 ns timing issue from IntTx/IntRx must be addressed via XDC
+      // false-path / set_clock_groups constraints in the IP wrapper, not here.
+      withClockAndReset(icenic.clock, false.B.asAsyncReset) {
+        // Instantiate Xilinx Ethernet IP BlackBox from omnixtendeth generator
+        val xilinxEth = Module(new XilinxEthBlackBox)
+
+        // Ethernet IP uses internal reset from GT lock - tie sys_rst to false
+        // The IP handles reset sequencing internally based on GT reference clock lock
+        xilinxEth.io.sys_rst := false.B
+
+        // Connect XilinxEth to ChipTop Ethernet pins
+        ethIO.sgmii_txp := xilinxEth.io.sgmii_txp
+        ethIO.sgmii_txn := xilinxEth.io.sgmii_txn
+        xilinxEth.io.sgmii_rxp := ethIO.sgmii_rxp
+        xilinxEth.io.sgmii_rxn := ethIO.sgmii_rxn
+
+        // Connect Ethernet clocks
+        xilinxEth.io.gt_refclk_p := ethIO.eth_gt_refclk_p
+        xilinxEth.io.gt_refclk_n := ethIO.eth_gt_refclk_n
+
+        // Connect Ethernet status
+        ethIO.link_up        := xilinxEth.io.link_up
+        ethIO.speed_is_100   := xilinxEth.io.speed_is_100
+        ethIO.speed_is_10_100 := xilinxEth.io.speed_is_10_100
+
+        // TX path: IceNIC → Queue → XilinxEth → SGMII
+        // NICIOvonly.out is Valid (no ready) — NIC internally sets out.ready=true
+        val txQueue = Module(new Queue(new StreamChannel(64), 4))
+
+        txQueue.io.enq.valid := icenic.bits.out.valid
+        txQueue.io.enq.bits  := icenic.bits.out.bits
+
+        xilinxEth.io.s_axis_tx_valid := txQueue.io.deq.valid
+        xilinxEth.io.s_axis_tx_data  := txQueue.io.deq.bits.data
+        xilinxEth.io.s_axis_tx_keep  := txQueue.io.deq.bits.keep
+        xilinxEth.io.s_axis_tx_last  := txQueue.io.deq.bits.last
+        txQueue.io.deq.ready         := xilinxEth.io.s_axis_tx_ready
+
+        // RX path: SGMII → XilinxEth → Queue → IceNIC
+        val rxQueue = Module(new Queue(new StreamChannel(64), 4))
+
+        rxQueue.io.enq.valid      := xilinxEth.io.m_axis_rx_valid
+        rxQueue.io.enq.bits.data  := xilinxEth.io.m_axis_rx_data
+        rxQueue.io.enq.bits.keep  := xilinxEth.io.m_axis_rx_keep
+        rxQueue.io.enq.bits.last  := xilinxEth.io.m_axis_rx_last
+        xilinxEth.io.m_axis_rx_ready := rxQueue.io.enq.ready
+
+        icenic.bits.in.valid := rxQueue.io.deq.valid
+        icenic.bits.in.bits  := rxQueue.io.deq.bits
+        rxQueue.io.deq.ready := true.B  // Always consume (Valid interface)
+
+        // MAC address and flow control settings
+        icenic.bits.macAddr := 0x53e007350a00L.U  // 00:0a:35:07:e0:53 (Xilinx OUI), byte-swapped for LE RISC-V ioread64
+        icenic.bits.rlimit.inc       := 1.U
+        icenic.bits.rlimit.period    := 1.U
+        icenic.bits.rlimit.size      := 8.U
+        icenic.bits.pauser.threshold := 64.U
+        icenic.bits.pauser.quanta    := 128.U
+        icenic.bits.pauser.refresh   := 32.U
+
+        println("[DEBUG] IceNIC-XilinxEth-SGMII connection established")
+      }
+      // Return the Ethernet port for HarnessBinder to connect
+      (Seq(EthernetPort(() => ethIO)), Nil)
+    }.getOrElse((Nil, Nil))
+  }
+})

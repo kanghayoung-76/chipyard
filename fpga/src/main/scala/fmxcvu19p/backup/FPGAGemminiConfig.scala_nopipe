@@ -1,0 +1,114 @@
+package chipyard.fpga.fmxcvu19p
+
+import chisel3._
+import org.chipsalliance.cde.config.{Config, Parameters}
+import freechips.rocketchip.diplomacy.LazyModule
+import freechips.rocketchip.tile.BuildRoCC
+
+import gemmini._
+import gemmini.Arithmetic.SIntArithmetic
+import hardfloat._
+
+/**
+ * FPGA-optimized Gemmini configurations for XCVU19P
+ *
+ * Option A: Use original combinational scale_func with high latency.
+ * Relies on Vivado REGISTER_BALANCING to move output pipeline registers
+ * into the combinational path for timing closure.
+ *
+ * Requirements:
+ * - Add to XDC: set_property REGISTER_BALANCING yes [current_design]
+ * - Or enable retiming in synthesis: STEPS.SYNTH_DESIGN.ARGS.RETIMING true
+ */
+object FPGAGemminiConfigs {
+
+  // FPGA-optimized config using ORIGINAL scale_func (pure combinational)
+  // High latency (16) provides registers for Vivado to retime into the path
+  // 52 logic levels / 16 registers = ~3-4 levels per stage after retiming
+  val fpgaConfig = GemminiConfigs.defaultConfig.copy(
+    acc_scale_args = Some(ScaleArguments(
+      // =========================================================================
+      // ORIGINAL COMBINATIONAL SCALE FUNCTION (no internal pipeline)
+      // Vivado REGISTER_BALANCING will move output registers into this path
+      // =========================================================================
+      (t: SInt, f: Float) => {
+        val f_rec = recFNFromFN(f.expWidth, f.sigWidth, f.bits)
+
+        // Integer to Recoded Float
+        val in_to_rec_fn = Module(new INToRecFN(t.getWidth, f.expWidth, f.sigWidth))
+        in_to_rec_fn.io.signedIn := true.B
+        in_to_rec_fn.io.in := t.asTypeOf(UInt(t.getWidth.W))
+        in_to_rec_fn.io.roundingMode := consts.round_near_even
+        in_to_rec_fn.io.detectTininess := consts.tininess_afterRounding
+
+        val t_rec = in_to_rec_fn.io.out
+
+        // Multiply-Add
+        val muladder = Module(new MulAddRecFN(f.expWidth, f.sigWidth))
+        muladder.io.op := 0.U
+        muladder.io.roundingMode := consts.round_near_even
+        muladder.io.detectTininess := consts.tininess_afterRounding
+
+        muladder.io.a := t_rec
+        muladder.io.b := f_rec
+        muladder.io.c := 0.U
+
+        // Recoded Float to Integer
+        val rec_fn_to_in = Module(new RecFNToIN(f.expWidth, f.sigWidth, t.getWidth))
+        rec_fn_to_in.io.in := muladder.io.out
+        rec_fn_to_in.io.roundingMode := consts.round_near_even
+        rec_fn_to_in.io.signedOut := true.B
+
+        // Saturation
+        val overflow = rec_fn_to_in.io.intExceptionFlags(1)
+        val maxsat = ((1 << (t.getWidth-1))-1).S
+        val minsat = (-(1 << (t.getWidth-1))).S
+        val sign = rawFloatFromRecFN(f.expWidth, f.sigWidth, rec_fn_to_in.io.in).sign
+        val sat = Mux(sign, minsat, maxsat)
+
+        Mux(overflow, sat, rec_fn_to_in.io.out.asTypeOf(t))
+      },
+      16,  // High latency for REGISTER_BALANCING to retime
+      Float(8, 24),
+      -1,  // Use inline path (num_scale_units = -1)
+      identity = "1.0",
+      c_str = "({float y = ROUND_NEAR_EVEN((x) * (scale)); y > INT8_MAX ? INT8_MAX : (y < INT8_MIN ? INT8_MIN : (acc_t)y);})"
+    ))
+  )
+
+  // Even higher latency config for very tight timing requirements
+  val fpgaHighLatencyConfig = fpgaConfig.copy(
+    acc_scale_args = Some(fpgaConfig.acc_scale_args.get.copy(latency = 24))
+  )
+}
+
+/**
+ * FPGA-optimized Gemmini Config mixin
+ * Use this instead of DefaultGemminiConfig for FPGA builds with timing issues
+ */
+class FPGAGemminiConfig[T <: Data : Arithmetic, U <: Data, V <: Data](
+  gemminiConfig: GemminiArrayConfig[T,U,V] = FPGAGemminiConfigs.fpgaConfig
+) extends Config((site, here, up) => {
+  case BuildRoCC => up(BuildRoCC) ++ Seq(
+    (p: Parameters) => {
+      implicit val q = p
+      val gemmini = LazyModule(new Gemmini(gemminiConfig))
+      gemmini
+    }
+  )
+})
+
+/**
+ * High-latency FPGA Gemmini Config for very tight timing
+ */
+class FPGAGemminiHighLatencyConfig[T <: Data : Arithmetic, U <: Data, V <: Data](
+  gemminiConfig: GemminiArrayConfig[T,U,V] = FPGAGemminiConfigs.fpgaHighLatencyConfig
+) extends Config((site, here, up) => {
+  case BuildRoCC => up(BuildRoCC) ++ Seq(
+    (p: Parameters) => {
+      implicit val q = p
+      val gemmini = LazyModule(new Gemmini(gemminiConfig))
+      gemmini
+    }
+  )
+})

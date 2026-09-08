@@ -312,6 +312,20 @@ class WithCustomBootPinPlusArg extends HarnessBinder({
   }
 })
 
+// Drive the Ethernet/SGMII port (created by WithXilinxEthAdapter) in simulation.
+// The XilinxEth PCS/PMA IP only exists in Vivado; under Verilator the blackbox
+// wrapper (XilinxEth_SGMII_Wrapper.sv, `ifdef VERILATOR branch) substitutes a
+// GMII TX->RX loopback clocked by eth_gt_refclk_p, so driving a real 125MHz
+// clock here makes the NIC loop its own frames back. SGMII pins are inert.
+class WithSimEthernetLoopback extends HarnessBinder({
+  case (th: HasHarnessInstantiators, port: EthernetPort, chipId: Int) => {
+    port.io.eth_gt_refclk_p := th.harnessClockInstantiator.requestClockMHz("eth_gt_refclk", 125)
+    port.io.eth_gt_refclk_n := false.B.asClock
+    port.io.sgmii_rxp := 0.U
+    port.io.sgmii_rxn := 0.U
+  }
+})
+
 class WithClockFromHarness extends HarnessBinder({
   case (th: HasHarnessInstantiators, port: ClockPort, chipId: Int) => {
 // DOC include start: HarnessClockInstantiatorEx

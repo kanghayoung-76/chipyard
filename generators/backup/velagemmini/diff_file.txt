@@ -1,0 +1,16 @@
+<=======AccumulatorScale.scala=======>
+<=======Arithmetic.scala=======>
+<=======ConfigsFP.scala=======>
+<=======Configs.scala=======>
+<=======Controller.scala=======>
+<=======DSEConfigs.scala=======>
+<=======ExecuteController.scala=======>
+<=======GemminiConfigs.scala=======>
+<=======GemminiISA.scala=======>
+<=======LocalAddr.scala=======>
+<=======LoopConv.scala=======>
+<=======LoopMatmul.scala=======>
+<=======Normalizer.scala=======>
+<=======PE.scala=======>
+<=======ReservationStation.scala=======>
+<=======Scratchpad.scala=======>

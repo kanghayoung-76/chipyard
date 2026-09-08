@@ -1,0 +1,337 @@
+// See LICENSE for license details.
+//
+// VelaAxiEthRtl: PLAN 3 -- same IP as plan 1 (Xilinx AXI 1G/2.5G Ethernet
+// Subsystem + AXI DMA) but WITHOUT a block design. The two IP are instantiated
+// standalone (create_ip) in a hand-wired SV wrapper (vsrc/VelaAxiEthRtlWrapper.sv),
+// and the DMA's THREE memory masters (MM2S/S2MM/SG) are merged in the TileLink
+// fabric (3x AXI4ToTL -> FBUS) instead of a Xilinx interconnect -- so no
+// SmartConnect/axi_interconnect (both unusable standalone) and no BD.
+//
+// Coexists with plan 1's `VelaAxiEth` (BD-based); this is a separate peripheral.
+// Reuses VelaAxiEthParams. Same external boundary to the RJ45 (LVDS SGMII), so
+// the same DTS overlay + mainline xilinx_axienet driver apply.
+package velaEth
+
+import chisel3._
+import chisel3.util._
+
+import org.chipsalliance.cde.config.Parameters
+import freechips.rocketchip.diplomacy._
+import freechips.rocketchip.resources.SimpleDevice
+import freechips.rocketchip.amba.axi4._
+import freechips.rocketchip.tilelink._
+import freechips.rocketchip.interrupts._
+
+/** BlackBox for the hand-wired wrapper vsrc/VelaAxiEthRtlWrapper.sv.
+  * Exposes the DMA's 3 ID-less memory masters (MM2S read / S2MM write / SG full),
+  * two AXI-Lite control slaves, interrupts, and the LVDS SGMII pins. */
+class VelaAxiEthRtlBlackBox(params: VelaAxiEthParams) extends BlackBox 
+//(
+//Map (
+//"MM_DATA_W" -> IntParam(params.mmDataBits),
+//"MM_ADDR_W" -> IntParam(params.mmAddrBits)
+//)
+//)
+with HasBlackBoxResource 
+{
+  val MD = params.mmDataBits   // 64  (MM2S/S2MM memory data width)
+  val MA = params.mmAddrBits   // 38
+  val SD = 32                  // SG memory data width (auto-derived by axi_dma)
+
+  val io = IO(new Bundle {
+    val axi_aclk    = Input(Clock())
+    val axi_aresetn = Input(Bool())
+
+    // ---- M_AXI_MM2S : read-only (TX payload fetch), MD-bit -------------------
+    val m_axi_mm2s_arvalid = Output(Bool())
+    val m_axi_mm2s_arready = Input(Bool())
+    val m_axi_mm2s_araddr  = Output(UInt(MA.W))
+    val m_axi_mm2s_arlen   = Output(UInt(8.W))
+    val m_axi_mm2s_arsize  = Output(UInt(3.W))
+    val m_axi_mm2s_arburst = Output(UInt(2.W))
+    val m_axi_mm2s_rvalid  = Input(Bool())
+    val m_axi_mm2s_rready  = Output(Bool())
+    val m_axi_mm2s_rdata   = Input(UInt(MD.W))
+    val m_axi_mm2s_rresp   = Input(UInt(2.W))
+    val m_axi_mm2s_rlast   = Input(Bool())
+
+    // ---- M_AXI_S2MM : write-only (RX payload store), MD-bit ------------------
+    val m_axi_s2mm_awvalid = Output(Bool())
+    val m_axi_s2mm_awready = Input(Bool())
+    val m_axi_s2mm_awaddr  = Output(UInt(MA.W))
+    val m_axi_s2mm_awlen   = Output(UInt(8.W))
+    val m_axi_s2mm_awsize  = Output(UInt(3.W))
+    val m_axi_s2mm_awburst = Output(UInt(2.W))
+    val m_axi_s2mm_wvalid  = Output(Bool())
+    val m_axi_s2mm_wready  = Input(Bool())
+    val m_axi_s2mm_wdata   = Output(UInt(MD.W))
+    val m_axi_s2mm_wstrb   = Output(UInt((MD/8).W))
+    val m_axi_s2mm_wlast   = Output(Bool())
+    val m_axi_s2mm_bvalid  = Input(Bool())
+    val m_axi_s2mm_bready  = Output(Bool())
+    val m_axi_s2mm_bresp   = Input(UInt(2.W))
+
+    // ---- M_AXI_SG : full (scatter-gather descriptors), SD-bit ----------------
+    val m_axi_sg_awvalid = Output(Bool())
+    val m_axi_sg_awready = Input(Bool())
+    val m_axi_sg_awaddr  = Output(UInt(MA.W))
+    val m_axi_sg_awlen   = Output(UInt(8.W))
+    val m_axi_sg_awsize  = Output(UInt(3.W))
+    val m_axi_sg_awburst = Output(UInt(2.W))
+    val m_axi_sg_wvalid  = Output(Bool())
+    val m_axi_sg_wready  = Input(Bool())
+    val m_axi_sg_wdata   = Output(UInt(SD.W))
+    val m_axi_sg_wstrb   = Output(UInt((SD/8).W))
+    val m_axi_sg_wlast   = Output(Bool())
+    val m_axi_sg_bvalid  = Input(Bool())
+    val m_axi_sg_bready  = Output(Bool())
+    val m_axi_sg_bresp   = Input(UInt(2.W))
+    val m_axi_sg_arvalid = Output(Bool())
+    val m_axi_sg_arready = Input(Bool())
+    val m_axi_sg_araddr  = Output(UInt(MA.W))
+    val m_axi_sg_arlen   = Output(UInt(8.W))
+    val m_axi_sg_arsize  = Output(UInt(3.W))
+    val m_axi_sg_arburst = Output(UInt(2.W))
+    val m_axi_sg_rvalid  = Input(Bool())
+    val m_axi_sg_rready  = Output(Bool())
+    val m_axi_sg_rdata   = Input(UInt(SD.W))
+    val m_axi_sg_rresp   = Input(UInt(2.W))
+    val m_axi_sg_rlast   = Input(Bool())
+
+    // ---- S_AXI_DMA : AXI-Lite, 10-bit local addr, no wstrb ------------------
+    val s_axi_dma_awvalid = Input(Bool())
+    val s_axi_dma_awready = Output(Bool())
+    val s_axi_dma_awaddr  = Input(UInt(10.W))
+    val s_axi_dma_wvalid  = Input(Bool())
+    val s_axi_dma_wready  = Output(Bool())
+    val s_axi_dma_wdata   = Input(UInt(32.W))
+    val s_axi_dma_bvalid  = Output(Bool())
+    val s_axi_dma_bready  = Input(Bool())
+    val s_axi_dma_bresp   = Output(UInt(2.W))
+    val s_axi_dma_arvalid = Input(Bool())
+    val s_axi_dma_arready = Output(Bool())
+    val s_axi_dma_araddr  = Input(UInt(10.W))
+    val s_axi_dma_rvalid  = Output(Bool())
+    val s_axi_dma_rready  = Input(Bool())
+    val s_axi_dma_rdata   = Output(UInt(32.W))
+    val s_axi_dma_rresp   = Output(UInt(2.W))
+
+    // ---- S_AXI_ETH : AXI-Lite, 18-bit local addr, with wstrb ----------------
+    val s_axi_eth_awvalid = Input(Bool())
+    val s_axi_eth_awready = Output(Bool())
+    val s_axi_eth_awaddr  = Input(UInt(18.W))
+    val s_axi_eth_wvalid  = Input(Bool())
+    val s_axi_eth_wready  = Output(Bool())
+    val s_axi_eth_wdata   = Input(UInt(32.W))
+    val s_axi_eth_wstrb   = Input(UInt(4.W))
+    val s_axi_eth_bvalid  = Output(Bool())
+    val s_axi_eth_bready  = Input(Bool())
+    val s_axi_eth_bresp   = Output(UInt(2.W))
+    val s_axi_eth_arvalid = Input(Bool())
+    val s_axi_eth_arready = Output(Bool())
+    val s_axi_eth_araddr  = Input(UInt(18.W))
+    val s_axi_eth_rvalid  = Output(Bool())
+    val s_axi_eth_rready  = Input(Bool())
+    val s_axi_eth_rdata   = Output(UInt(32.W))
+    val s_axi_eth_rresp   = Output(UInt(2.W))
+
+    // ---- interrupts ----------------------------------------------------------
+    val mm2s_introut = Output(Bool())
+    val s2mm_introut = Output(Bool())
+    val mac_irq      = Output(Bool())
+
+    // ---- physical Ethernet pins (LVDS SGMII) --------------------------------
+    val lvds_clk_clk_p = Input(Clock())
+    val lvds_clk_clk_n = Input(Clock())
+    val sgmii_rxp      = Input(Bool())
+    val sgmii_rxn      = Input(Bool())
+    val sgmii_txp      = Output(Bool())
+    val sgmii_txn      = Output(Bool())
+  })
+
+  println("[VelaAxiEthRtl] BlackBox VelaAxiEthRtlWrapper included (no BD, TL-fabric merge)")
+  addResource("vsrc/VelaAxiEthRtlWrapper.sv")
+}
+
+/** Physical Ethernet pins (LVDS SGMII), surfaced to the RJ45. */
+class VelaEthRtlSgmiiIO extends Bundle {
+  val lvds_clk_clk_p = Input(Clock())
+  val lvds_clk_clk_n = Input(Clock())
+  val sgmii_rxp      = Input(Bool())
+  val sgmii_rxn      = Input(Bool())
+  val sgmii_txp      = Output(Bool())
+  val sgmii_txn      = Output(Bool())
+}
+
+trait HasVelaEthRtlSgmii { def sgmii: VelaEthRtlSgmiiIO }
+
+class VelaAxiEthRtl(params: VelaAxiEthParams)(implicit p: Parameters) extends LazyModule {
+
+  // Custom DTS devices that emit the xilinx_axienet driver glue automatically
+  // (phy-mode, axistream-connected, phy-handle/mdio) -> generated .dts is
+  // driver-ready, no overlay merge needed. See VelaEthDtsDevices.scala.
+  val dmaDevice = new VelaEthDmaDtsDevice
+  val ethDevice = new VelaEthMacDtsDevice(dmaDevice)
+
+  // --- three ID-less DMA memory masters, each bridged AXI4 -> TL --------------
+  private def dmaMaster(nm: String) = AXI4MasterNode(Seq(AXI4MasterPortParameters(
+    masters = Seq(AXI4MasterParameters(name = nm, id = IdRange(0, 1))))))
+  val mm2sNode = dmaMaster("vela_rtl_mm2s")
+  val s2mmNode = dmaMaster("vela_rtl_s2mm")
+  val sgNode   = dmaMaster("vela_rtl_sg")
+
+  // Exposed TL master nodes; the trait couples each into FBUS (which merges them).
+  val mm2sTL = TLIdentityNode()
+  val s2mmTL = TLIdentityNode()
+  val sgTL   = TLIdentityNode()
+  (mm2sTL := TLBuffer() := TLWidthWidget(params.mmDataBits/8) := AXI4ToTL() := AXI4UserYanker(capMaxFlight=Some(8)) := AXI4Fragmenter() := AXI4Buffer() := mm2sNode)
+  (s2mmTL := TLBuffer() := TLWidthWidget(params.mmDataBits/8) := AXI4ToTL() := AXI4UserYanker(capMaxFlight=Some(8)) := AXI4Fragmenter() := AXI4Buffer() := s2mmNode)
+  (sgTL   := TLBuffer() := TLWidthWidget(32/8)                := AXI4ToTL() := AXI4UserYanker(capMaxFlight=Some(8)) := AXI4Fragmenter() := AXI4Buffer() := sgNode)
+
+  // --- control slaves: TL -> AXI4-Lite ---------------------------------------
+  private def ctrlSlaveNode(base: BigInt, size: BigInt, dev: SimpleDevice) =
+    AXI4SlaveNode(Seq(AXI4SlavePortParameters(
+      slaves = Seq(AXI4SlaveParameters(
+        address       = Seq(AddressSet(base, size - 1)),
+        resources     = dev.reg("control"),
+        regionType    = RegionType.UNCACHED,
+        executable    = false,
+        supportsWrite = TransferSizes(1, 4),
+        supportsRead  = TransferSizes(1, 4),
+        interleavedId = Some(0))),
+      beatBytes = 4)))
+  val dmaCtrlAxiNode = ctrlSlaveNode(params.dmaCtrlAddress, params.dmaCtrlSize, dmaDevice)
+  val ethCtrlAxiNode = ctrlSlaveNode(params.ethCtrlAddress, params.ethCtrlSize, ethDevice)
+  val dmaCtrlTLNode = TLIdentityNode()
+  val ethCtrlTLNode = TLIdentityNode()
+  (dmaCtrlAxiNode := AXI4Buffer() := TLToAXI4() := dmaCtrlTLNode)
+  (ethCtrlAxiNode := AXI4Buffer() := TLToAXI4() := ethCtrlTLNode)
+
+  // Interrupts are split across the two DTS nodes on purpose: xilinx_axienet
+  // reads the DMA rx/tx IRQs out of the axistream-connected (dma@) node but its
+  // own core IRQ out of the ethernet@ node, so a single 3-wide source bound to
+  // the DMA device leaves the MAC IRQ invisible to the driver.
+  //   int_node     -> dma@ : [mm2s, s2mm]
+  //   mac_int_node -> eth@ : [mac]
+  // Attach order in the periphery trait fixes the PLIC numbering (mm2s, s2mm,
+  // then mac), which matches the wiring below.
+  require(params.nInterrupts == 3, s"expected [mm2s, s2mm, mac], got ${params.nInterrupts}")
+  val int_node     = IntSourceNode(IntSourcePortSimple(num = 2, resources = dmaDevice.int))
+  val mac_int_node = IntSourceNode(IntSourcePortSimple(num = 1, resources = ethDevice.int))
+
+  lazy val module = new LazyModuleImp(this) with HasVelaEthRtlSgmii {
+    val blackbox = Module(new VelaAxiEthRtlBlackBox(params))
+
+    val sgmii = IO(new VelaEthRtlSgmiiIO)
+    sgmii.sgmii_txp := blackbox.io.sgmii_txp
+    sgmii.sgmii_txn := blackbox.io.sgmii_txn
+    blackbox.io.sgmii_rxp      := sgmii.sgmii_rxp
+    blackbox.io.sgmii_rxn      := sgmii.sgmii_rxn
+    blackbox.io.lvds_clk_clk_p := sgmii.lvds_clk_clk_p
+    blackbox.io.lvds_clk_clk_n := sgmii.lvds_clk_clk_n
+
+    blackbox.io.axi_aclk    := clock
+    blackbox.io.axi_aresetn := (~reset.asBool)
+
+    // -- control slaves (id/echo round-trip in Scala; addr truncated to port) --
+    connectCtrl(dmaCtrlAxiNode.in(0)._1,
+      blackbox.io.s_axi_dma_awvalid, blackbox.io.s_axi_dma_awready, blackbox.io.s_axi_dma_awaddr,
+      blackbox.io.s_axi_dma_wvalid,  blackbox.io.s_axi_dma_wready,  blackbox.io.s_axi_dma_wdata, None,
+      blackbox.io.s_axi_dma_bvalid,  blackbox.io.s_axi_dma_bready,  blackbox.io.s_axi_dma_bresp,
+      blackbox.io.s_axi_dma_arvalid, blackbox.io.s_axi_dma_arready, blackbox.io.s_axi_dma_araddr,
+      blackbox.io.s_axi_dma_rvalid,  blackbox.io.s_axi_dma_rready,  blackbox.io.s_axi_dma_rdata, blackbox.io.s_axi_dma_rresp)
+    connectCtrl(ethCtrlAxiNode.in(0)._1,
+      blackbox.io.s_axi_eth_awvalid, blackbox.io.s_axi_eth_awready, blackbox.io.s_axi_eth_awaddr,
+      blackbox.io.s_axi_eth_wvalid,  blackbox.io.s_axi_eth_wready,  blackbox.io.s_axi_eth_wdata, Some(blackbox.io.s_axi_eth_wstrb),
+      blackbox.io.s_axi_eth_bvalid,  blackbox.io.s_axi_eth_bready,  blackbox.io.s_axi_eth_bresp,
+      blackbox.io.s_axi_eth_arvalid, blackbox.io.s_axi_eth_arready, blackbox.io.s_axi_eth_araddr,
+      blackbox.io.s_axi_eth_rvalid,  blackbox.io.s_axi_eth_rready,  blackbox.io.s_axi_eth_rdata, blackbox.io.s_axi_eth_rresp)
+
+    // -- DMA memory masters ---------------------------------------------------
+    val (mm2s, _) = mm2sNode.out(0)
+    driveAr(mm2s.ar, blackbox.io.m_axi_mm2s_arvalid, blackbox.io.m_axi_mm2s_arready, blackbox.io.m_axi_mm2s_araddr, blackbox.io.m_axi_mm2s_arlen, blackbox.io.m_axi_mm2s_arsize, blackbox.io.m_axi_mm2s_arburst)
+    blackbox.io.m_axi_mm2s_rvalid := mm2s.r.valid; mm2s.r.ready := blackbox.io.m_axi_mm2s_rready
+    blackbox.io.m_axi_mm2s_rdata := mm2s.r.bits.data; blackbox.io.m_axi_mm2s_rresp := mm2s.r.bits.resp; blackbox.io.m_axi_mm2s_rlast := mm2s.r.bits.last
+    tieUnusedWrite(mm2s)
+
+    val (s2mm, _) = s2mmNode.out(0)
+    driveAw(s2mm.aw, blackbox.io.m_axi_s2mm_awvalid, blackbox.io.m_axi_s2mm_awready, blackbox.io.m_axi_s2mm_awaddr, blackbox.io.m_axi_s2mm_awlen, blackbox.io.m_axi_s2mm_awsize, blackbox.io.m_axi_s2mm_awburst)
+    s2mm.w.valid := blackbox.io.m_axi_s2mm_wvalid; blackbox.io.m_axi_s2mm_wready := s2mm.w.ready
+    s2mm.w.bits.data := blackbox.io.m_axi_s2mm_wdata; s2mm.w.bits.strb := blackbox.io.m_axi_s2mm_wstrb; s2mm.w.bits.last := blackbox.io.m_axi_s2mm_wlast; s2mm.w.bits.user := DontCare
+    blackbox.io.m_axi_s2mm_bvalid := s2mm.b.valid; s2mm.b.ready := blackbox.io.m_axi_s2mm_bready; blackbox.io.m_axi_s2mm_bresp := s2mm.b.bits.resp
+    tieUnusedRead(s2mm)
+
+    val (sg, _) = sgNode.out(0)
+    driveAw(sg.aw, blackbox.io.m_axi_sg_awvalid, blackbox.io.m_axi_sg_awready, blackbox.io.m_axi_sg_awaddr, blackbox.io.m_axi_sg_awlen, blackbox.io.m_axi_sg_awsize, blackbox.io.m_axi_sg_awburst)
+    sg.w.valid := blackbox.io.m_axi_sg_wvalid; blackbox.io.m_axi_sg_wready := sg.w.ready
+    sg.w.bits.data := blackbox.io.m_axi_sg_wdata; sg.w.bits.strb := blackbox.io.m_axi_sg_wstrb; sg.w.bits.last := blackbox.io.m_axi_sg_wlast; sg.w.bits.user := DontCare
+    blackbox.io.m_axi_sg_bvalid := sg.b.valid; sg.b.ready := blackbox.io.m_axi_sg_bready; blackbox.io.m_axi_sg_bresp := sg.b.bits.resp
+    driveAr(sg.ar, blackbox.io.m_axi_sg_arvalid, blackbox.io.m_axi_sg_arready, blackbox.io.m_axi_sg_araddr, blackbox.io.m_axi_sg_arlen, blackbox.io.m_axi_sg_arsize, blackbox.io.m_axi_sg_arburst)
+    blackbox.io.m_axi_sg_rvalid := sg.r.valid; sg.r.ready := blackbox.io.m_axi_sg_rready
+    blackbox.io.m_axi_sg_rdata := sg.r.bits.data; blackbox.io.m_axi_sg_rresp := sg.r.bits.resp; blackbox.io.m_axi_sg_rlast := sg.r.bits.last
+
+    // -- interrupts -----------------------------------------------------------
+    val (ints, _) = int_node.out(0)
+    ints(0) := blackbox.io.mm2s_introut
+    ints(1) := blackbox.io.s2mm_introut
+    val (macInts, _) = mac_int_node.out(0)
+    macInts(0) := blackbox.io.mac_irq
+  }
+
+  // ---- helpers --------------------------------------------------------------
+  private def driveAw(aw: IrrevocableIO[AXI4BundleAW], valid: Bool, ready: Bool, addr: UInt, len: UInt, size: UInt, burst: UInt): Unit = {
+    aw.valid := valid; ready := aw.ready
+    aw.bits.addr := addr; aw.bits.len := len; aw.bits.size := size; aw.bits.burst := burst
+    aw.bits.id := 0.U; aw.bits.lock := 0.U; aw.bits.cache := "b0011".U; aw.bits.prot := 0.U; aw.bits.qos := 0.U
+    aw.bits.user := DontCare; aw.bits.echo := DontCare
+  }
+  private def driveAr(ar: IrrevocableIO[AXI4BundleAR], valid: Bool, ready: Bool, addr: UInt, len: UInt, size: UInt, burst: UInt): Unit = {
+    ar.valid := valid; ready := ar.ready
+    ar.bits.addr := addr; ar.bits.len := len; ar.bits.size := size; ar.bits.burst := burst
+    ar.bits.id := 0.U; ar.bits.lock := 0.U; ar.bits.cache := "b0011".U; ar.bits.prot := 0.U; ar.bits.qos := 0.U
+    ar.bits.user := DontCare; ar.bits.echo := DontCare
+  }
+  private def tieUnusedWrite(mm: AXI4Bundle): Unit = {  // read-only master
+    mm.aw.valid := false.B; mm.aw.bits := DontCare
+    mm.w.valid  := false.B; mm.w.bits  := DontCare
+    mm.b.ready  := true.B
+  }
+  private def tieUnusedRead(mm: AXI4Bundle): Unit = {   // write-only master
+    mm.ar.valid := false.B; mm.ar.bits := DontCare
+    mm.r.ready  := true.B
+  }
+
+  // AXI4-Lite slave <-> flat blackbox ports, round-tripping id+echo for TLToAXI4.
+  private def connectCtrl(
+    axi:     AXI4Bundle,
+    awvalid: Bool, awready: Bool, awaddr: UInt,
+    wvalid:  Bool, wready:  Bool, wdata:  UInt, wstrb: Option[UInt],
+    bvalid:  Bool, bready:  Bool, bresp:  UInt,
+    arvalid: Bool, arready: Bool, araddr: UInt,
+    rvalid:  Bool, rready:  Bool, rdata:  UInt, rresp: UInt): Unit = {
+    val wq = Module(new Queue(new Bundle {
+      val id = chiselTypeOf(axi.aw.bits.id); val echo = chiselTypeOf(axi.aw.bits.echo) }, 4))
+    awvalid := axi.aw.valid && wq.io.enq.ready
+    axi.aw.ready := awready && wq.io.enq.ready
+    awaddr := axi.aw.bits.addr(awaddr.getWidth - 1, 0)
+    wq.io.enq.valid := axi.aw.valid && awready
+    wq.io.enq.bits.id := axi.aw.bits.id; wq.io.enq.bits.echo := axi.aw.bits.echo
+    wvalid := axi.w.valid; axi.w.ready := wready; wdata := axi.w.bits.data
+    wstrb.foreach { _ := axi.w.bits.strb }
+    axi.b.valid := bvalid && wq.io.deq.valid
+    bready := axi.b.ready && wq.io.deq.valid
+    wq.io.deq.ready := bvalid && axi.b.ready
+    axi.b.bits.resp := bresp; axi.b.bits.id := wq.io.deq.bits.id; axi.b.bits.echo := wq.io.deq.bits.echo; axi.b.bits.user := DontCare
+    val rq = Module(new Queue(new Bundle {
+      val id = chiselTypeOf(axi.ar.bits.id); val echo = chiselTypeOf(axi.ar.bits.echo) }, 4))
+    arvalid := axi.ar.valid && rq.io.enq.ready
+    axi.ar.ready := arready && rq.io.enq.ready
+    araddr := axi.ar.bits.addr(araddr.getWidth - 1, 0)
+    rq.io.enq.valid := axi.ar.valid && arready
+    rq.io.enq.bits.id := axi.ar.bits.id; rq.io.enq.bits.echo := axi.ar.bits.echo
+    axi.r.valid := rvalid && rq.io.deq.valid
+    rready := axi.r.ready && rq.io.deq.valid
+    rq.io.deq.ready := rvalid && axi.r.ready
+    axi.r.bits.data := rdata; axi.r.bits.resp := rresp; axi.r.bits.id := rq.io.deq.bits.id; axi.r.bits.echo := rq.io.deq.bits.echo; axi.r.bits.user := DontCare; axi.r.bits.last := true.B
+  }
+}

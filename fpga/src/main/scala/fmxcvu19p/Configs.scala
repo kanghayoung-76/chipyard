@@ -1,0 +1,155 @@
+package chipyard.fpga.fmxcvu19p
+
+import sys.process._
+
+import org.chipsalliance.cde.config.{Config, Parameters}
+import freechips.rocketchip.subsystem.{SystemBusKey, PeripheryBusKey, ControlBusKey, ExtMem}
+import freechips.rocketchip.devices.debug.{DebugModuleKey, ExportDebug, JTAG}
+import freechips.rocketchip.devices.tilelink.{DevNullParams, BootROMLocated}
+import freechips.rocketchip.diplomacy.{RegionType, AddressSet}
+import freechips.rocketchip.resources.{DTSModel, DTSTimebase}
+
+import sifive.blocks.devices.spi.{PeripherySPIKey, SPIParams}
+import sifive.blocks.devices.uart.{PeripheryUARTKey, UARTParams}
+
+import sifive.fpgashells.shell.{DesignKey}
+import sifive.fpgashells.shell.xilinx.{NUMOFMEMORY, FMXCVU19PShellPMOD, FMXCVU19PShellPMOD2, FMXCVU19PShellSDLocation, FMXCVU19PDDRSize}
+
+import testchipip.serdes.{SerialTLKey}
+import testchipip.soc.{BankedScratchpadKey}
+
+import chipyard._
+import chipyard.harness._
+
+class WithDefaultPeripherals extends Config((site, here, up) => {
+  case PeripheryUARTKey => List(UARTParams(address = BigInt(0x64000000L)))
+  case PeripherySPIKey => List(SPIParams(rAddress = BigInt(0x64001000L)))
+  case FMXCVU19PShellPMOD => "SDIO"
+})
+
+// Use FMC HPC1 (J2) connector for SD card via TB-FMCL-PH breakout board
+// Better signal integrity for higher SPI clock speeds (up to 25MHz)
+class WithFMCSDPeripherals extends Config((site, here, up) => {
+  case PeripheryUARTKey => List(UARTParams(address = BigInt(0x64000000L)))
+  case PeripherySPIKey => List(SPIParams(rAddress = BigInt(0x64001000L)))
+  case FMXCVU19PShellSDLocation => "FMC"  // SD card on FMC instead of PMOD
+  //case FMXCVU19PShellPMOD => "JTAG"       // PMOD can be used for JTAG when SD is on FMC
+  case FMXCVU19PShellPMOD2 => "PMODJ53_JTAG"       // PMOD can be used for JTAG when SD is on FMC
+})
+
+// NUMOFMEMORY="2" → num_of_memory=true → use both DDRTA0 + DDRTA1
+// Default NUMOFMEMORY="1" → num_of_memory=false → DDRTA0 only
+class WithNumofMemory extends Config((site, here, up) => {
+  case NUMOFMEMORY => "2"
+})
+
+class WithSystemModifications extends Config((site, here, up) => {
+  case DTSTimebase => BigInt((1e6).toLong)
+  case BootROMLocated(x) => up(BootROMLocated(x), site).map { p =>
+    // invoke makefile for sdboot
+    val freqMHz = (site(SystemBusKey).dtsFrequency.get / (1000 * 1000)).toLong
+    val make = s"make -C fpga/src/main/resources/fmxcvu19p/sdboot PBUS_CLK=${freqMHz} bin"
+    require (make.! == 0, "Failed to build bootrom")
+    p.copy(hang = 0x10000, contentFileName = s"./fpga/src/main/resources/fmxcvu19p/sdboot/build/sdboot.bin")
+  }
+  // 1 MIG: 18 GiB; 2 MIGs (NUMOFMEMORY="2"): 36 GiB total
+  case ExtMem => up(ExtMem, site).map(x => x.copy(master = x.master.copy(
+    size = if (site(NUMOFMEMORY) == "2") site(FMXCVU19PDDRSize) * 2 else site(FMXCVU19PDDRSize))))
+  case SerialTLKey => Nil // remove serialized tl port
+})
+
+// Fix scratchpad address conflict with FMXCVU19P DDR memory at 0x80000000
+class WithFMXCVU19PSafeScratchpad extends Config((site, here, up) => {
+  case BankedScratchpadKey => up(BankedScratchpadKey).map { params =>
+    params.copy(base = 0x70000000L) // Move scratchpad to safe address
+  }
+})
+
+// DOC include start: AbstractFMXCVU19P and Rocket
+class WithFMXCVU19PTweaks extends Config(
+  // clocking
+  new chipyard.harness.WithAllClocksFromHarnessClockInstantiator ++
+  new chipyard.clocking.WithPassthroughClockGenerator ++
+  new chipyard.config.WithUniformBusFrequencies(100) ++
+  new WithFPGAFrequency(100) ++ // default 100MHz freq
+  // harness binders
+  new WithUART ++
+  new WithSPISDCard ++
+  new WithDDRMem ++
+  new WithJTAG ++
+  // other configuration
+  new WithDefaultPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++ // add SPI controller
+  new chipyard.config.WithTLBackingMemory ++ // use TL backing memory
+  new WithSystemModifications ++ // setup busses, use sdboot bootrom, setup ext. mem. size
+  new WithFMXCVU19PSafeScratchpad ++ // Fix scratchpad address conflict with DDR
+//  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new freechips.rocketchip.subsystem.WithNMemoryChannels(1)
+)
+
+class RocketFMXCVU19PConfig extends Config(
+  new WithFMXCVU19PTweaks ++
+  new chipyard.RocketConfig
+)
+// DOC include end: AbstractFMXCVU19P and Rocket
+
+// FMXCVU19P with SD card on FMC HPC1 (J2) via TB-FMCL-PH breakout board
+// Use this config for better SD card signal integrity (higher SPI clock speeds)
+class WithFMXCVU19PFMCSDTweaks extends Config(
+  // clocking
+  new chipyard.harness.WithAllClocksFromHarnessClockInstantiator ++
+  new chipyard.clocking.WithPassthroughClockGenerator ++
+  new chipyard.config.WithUniformBusFrequencies(100) ++
+  new WithFPGAFrequency(100) ++ // default 100MHz freq
+  // harness binders
+  new WithUART ++
+  new WithSPISDCard ++
+  new WithDDRMem ++
+  new WithJTAG ++
+  // other configuration - use FMC for SD card
+  new WithFMCSDPeripherals ++
+  new chipyard.config.WithSPI(BigInt(0x64001000L)) ++ // add SPI controller
+  new chipyard.config.WithTLBackingMemory ++ // use TL backing memory
+  new WithSystemModifications ++ // setup busses, use sdboot bootrom, setup ext. mem. size
+  new WithFMXCVU19PSafeScratchpad ++ // Fix scratchpad address conflict with DDR
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new freechips.rocketchip.subsystem.WithNMemoryChannels(1)
+)
+
+// Rocket config with SD card on FMC connector (TB-FMCL-PH)
+class RocketFMXCVU19PFMCSDConfig extends Config(
+  new WithNumofMemory ++              // NUMOFMEMORY="2" → use both DDRTA0 + DDRTA1
+  new WithFMXCVU19PFMCSDTweaks ++
+  new WithVelaTestHarness ++    // Use VelaFPGATestHarness (physical pins only, NIC internal)
+  new freechips.rocketchip.rocket.WithNHugeCores(1) ++                                // single rocket-core
+  new chipyard.config.AbstractConfig
+)
+
+
+// DOC RISC-V VELA 
+class WithVelaTestHarness extends Config((site, here, up) => {
+  case sifive.fpgashells.shell.DesignKey => (p: Parameters) => new VelaFPGATestHarness()(p)
+})
+
+
+class BoomFMXCVU19PConfig extends Config(
+  new WithFPGAFrequency(50) ++
+  new WithFMXCVU19PTweaks ++
+  new chipyard.MegaBoomV3Config
+)
+
+class WithFPGAFrequency(fMHz: Double) extends Config(
+  new chipyard.harness.WithHarnessBinderClockFreqMHz(fMHz) ++
+  new chipyard.config.WithSystemBusFrequency(fMHz) ++
+  new chipyard.config.WithPeripheryBusFrequency(fMHz) ++
+  new chipyard.config.WithControlBusFrequency(fMHz) ++
+  new chipyard.config.WithFrontBusFrequency(fMHz) ++
+  new chipyard.config.WithMemoryBusFrequency(fMHz)
+)
+
+class WithFPGAFreq25MHz extends WithFPGAFrequency(25)
+class WithFPGAFreq50MHz extends WithFPGAFrequency(50)
+class WithFPGAFreq75MHz extends WithFPGAFrequency(75)
+class WithFPGAFreq100MHz extends WithFPGAFrequency(100)
