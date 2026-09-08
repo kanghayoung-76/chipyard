@@ -6,6 +6,7 @@
 package chipyard
 
 import chisel3._
+import chisel3.util._
 
 import org.chipsalliance.cde.config.{Parameters, Field}
 import freechips.rocketchip.subsystem._
@@ -13,6 +14,9 @@ import freechips.rocketchip.tilelink._
 import freechips.rocketchip.devices.tilelink._
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.util.{DontTouch}
+
+import worldguard._
+import worldguard.examples._
 
 // ---------------------------------------------------------------------
 // Base system that uses the debug test module (dtm) to bringup the core
@@ -24,12 +28,23 @@ import freechips.rocketchip.util.{DontTouch}
 class ChipyardSystem(implicit p: Parameters) extends ChipyardSubsystem
   with HasAsyncExtInterrupts
   with CanHaveMasterTLMemPort // export TL port for outer memory
-  with CanHaveMasterAXI4MemPort // expose AXI port for outer mem
+  with CanHaveWGMasterAXI4MemPort // expose AXI port for outer mem (WGChecker in front)
+  //with CanHaveMasterAXI4MemPort // expose AXI port for outer mem
   with CanHaveMasterAXI4MMIOPort
   with CanHaveSlaveAXI4Port
 {
 
-  val bootROM  = p(BootROMLocated(location)).map { BootROM.attach(_, this, CBUS) }
+  val bootROM  = p(BootROMLocated(location)).map {
+    bootROMParams => {
+      p(WGBootROMKey) match {
+        case Some(wgcParams) => {
+          val wgc = WGCheckerAttachParams(wgcParams).attachTo(this)
+          WGBootROM.attach(bootROMParams, this, CBUS, wgc.wgc_node)
+        }
+        case None => BootROM.attach(bootROMParams, this, CBUS)
+      }
+    }
+  }
   val maskROMs = p(MaskROMLocated(location)).map { MaskROM.attach(_, this, CBUS) }
 
   override lazy val module = new ChipyardSystemModule(this)
@@ -80,12 +95,27 @@ trait CanHaveMasterTLMemPort { this: BaseSubsystem =>
     }
   }).toList.flatten)
 
+  // WGChecker on the TL mem port so DRAM behind this port is WID-filtered
+  // (ported from chipyard-1.11 / Vyond)
+  private val wgcParams = WGCheckerParams(
+    postfix = s"wgp_memport_",
+    mwid      = p(NWorlds) - 1,
+    widWidth  = log2Ceil(p(NWorlds)),
+    nSlots    = 8,
+    address   = 0x6000000,
+    size      = 4096,
+    lgMaxSize = 6,
+    granularity = 64,
+    lgAlign = 6)
+  private val wgc = WGCheckerAttachParams(wgcParams).attachTo(this)
+
   // disable inwards monitors from node since the class with this trait (i.e. DigitalTop)
   // doesn't provide an implicit clock to those monitors
   mbus.coupleTo(s"memory_controller_port_named_$portName") {
     (DisableMonitors { implicit p => memTLNode :*= TLBuffer() }
       :*= TLSourceShrinker(1 << idBits)
       :*= TLWidthWidget(mbus.beatBytes)
+      :*= wgc.wgc_node
       :*= _)
   }
 

@@ -41,6 +41,8 @@ import icenet.{CanHavePeripheryIceNIC, SimNetwork, NicLoopback, NICKey, NICIOvon
 import chipyard.{CanHaveMasterTLMemPort, ChipyardSystem, ChipyardSystemModule}
 import chipyard.example.{CanHavePeripheryGCD}
 
+import worldguard.CanHaveWGMasterAXI4MemPort
+
 import scala.reflect.{ClassTag}
 
 object IOBinderTypes {
@@ -387,6 +389,25 @@ class WithSerialTLPunchthrough extends OverrideIOBinder({
 
 class WithAXI4MemPunchthrough extends OverrideLazyIOBinder({
   (system: CanHaveMasterAXI4MemPort) => {
+    implicit val p: Parameters = GetSystemParameters(system)
+    val clockSinkNode = p(ExtMem).map(_ => ClockSinkNode(Seq(ClockSinkParameters())))
+    clockSinkNode.map(_ := system.asInstanceOf[HasTileLinkLocations].locateTLBusWrapper(MBUS).fixedClockNode)
+    def clockBundle = clockSinkNode.get.in.head._1
+
+    InModuleBody {
+      val ports: Seq[AXI4MemPort] = system.mem_axi4.zipWithIndex.map({ case (m, i) =>
+        val port = IO(new ClockedIO(DataMirror.internal.chiselTypeClone[AXI4Bundle](m))).suggestName(s"axi4_mem_${i}")
+        port.bits <> m
+        port.clock := clockBundle.clock
+        AXI4MemPort(() => port, p(ExtMem).get, system.memAXI4Node.edges.in(i), p(MemoryBusKey).dtsFrequency.get.toInt)
+      }).toSeq
+      (ports, Nil)
+    }
+  }
+})
+
+class WithWGAXI4MemPunchthrough extends OverrideLazyIOBinder({
+  (system: CanHaveWGMasterAXI4MemPort) => {
     implicit val p: Parameters = GetSystemParameters(system)
     val clockSinkNode = p(ExtMem).map(_ => ClockSinkNode(Seq(ClockSinkParameters())))
     clockSinkNode.map(_ := system.asInstanceOf[HasTileLinkLocations].locateTLBusWrapper(MBUS).fixedClockNode)

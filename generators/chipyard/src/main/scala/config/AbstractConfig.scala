@@ -51,7 +51,8 @@ class AbstractConfig extends Config(
   // Instead, they directly pass through the DigitalTop ports to ports in the ChipTop
   new chipyard.iobinders.WithI2CPunchthrough ++
   new chipyard.iobinders.WithSPIIOPunchthrough ++
-  new chipyard.iobinders.WithAXI4MemPunchthrough ++
+  //new chipyard.iobinders.WithAXI4MemPunchthrough ++ (WG)
+  new chipyard.iobinders.WithWGAXI4MemPunchthrough ++
   new chipyard.iobinders.WithAXI4MMIOPunchthrough ++
   new chipyard.iobinders.WithTLMemPunchthrough ++
   new chipyard.iobinders.WithL2FBusAXI4Punchthrough ++
@@ -117,7 +118,8 @@ class AbstractConfig extends Config(
                                         size = 64 * 1024) ++
 
   // Coherency settings
-  new freechips.rocketchip.subsystem.WithInclusiveCache ++          /** use Sifive LLC cache as root of coherence */
+  //new freechips.rocketchip.subsystem.WithInclusiveCache ++ (WG)
+  new worldguard.WithWGAwareInclusiveCache ++          /** use Sifive LLC cache as root of coherence */
 
   // Bus/interconnect settings
   new freechips.rocketchip.subsystem.WithCoherentBusTopology ++     /** hierarchical buses including sbus/mbus/pbus/fbus/cbus/l2 */

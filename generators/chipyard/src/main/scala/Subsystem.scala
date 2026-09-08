@@ -22,6 +22,8 @@ import freechips.rocketchip.amba.axi4._
 
 import testchipip.serdes.{CanHavePeripheryTLSerial, SerialTLKey}
 
+import worldguard.examples._
+
 trait CanHaveHTIF { this: BaseSubsystem =>
   // Advertise HTIF if system can communicate with fesvr
   if (this match {
@@ -71,7 +73,7 @@ class ChipyardSubsystem(implicit p: Parameters) extends BaseSubsystem
     with HasTileNotificationSinks
     with HasTileInputConstants
     with CanHavePeripheryCLINT
-    with CanHavePeripheryPLIC
+    with CanHaveWGPPLICOrPlic // WG-aware PLIC (falls back to stock PLIC when NWorlds==1)
     with HasPeripheryDebug
     with HasHierarchicalElementsRootContext
     with HasHierarchicalElements
