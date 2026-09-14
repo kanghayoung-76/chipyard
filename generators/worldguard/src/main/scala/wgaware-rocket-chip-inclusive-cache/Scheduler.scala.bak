@@ -249,16 +249,7 @@ class WGInclusiveCacheBankScheduler(params: InclusiveCacheParameters, widBits: I
     val will_reload = m.io.schedule.bits.reload && (may_pop || bypass)
     m.io.allocate.bits.viewAsSupertype(chiselTypeOf(requests.io.data)) := Mux(bypass, WireInit(new WGQueuedRequest(params, widBits), init = request.bits), requests.io.data)
     m.io.allocate.bits.set := m.io.status.bits.set
-    // `set` needs its own assignment because WGQueuedRequest has no set field --
-    // it is added by WGFullRequest -- and a reloading MSHR serves the same set by
-    // construction, so taking it from status is right.
-    //
-    // `wid` is NOT in that position. It *is* a WGQueuedRequest field, so the
-    // viewAsSupertype above already assigned it from the request being loaded,
-    // and overriding it with status would hand the new request the *previous*
-    // request's world. A reload happens when a second request lands on a set an
-    // MSHR is already working, and those two requests can come from different
-    // worlds.
+    m.io.allocate.bits.wid := m.io.status.bits.wid
     m.io.allocate.bits.repeat := m.io.allocate.bits.tag === m.io.status.bits.tag
     m.io.allocate.valid := sel && will_reload
   }
