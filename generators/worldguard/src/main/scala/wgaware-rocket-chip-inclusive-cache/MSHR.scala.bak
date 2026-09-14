@@ -248,13 +248,6 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
     final_meta_writeback.clients := Mux(meta.hit, meta.clients & ~probes_toN, 0.U) |
                                     Mux(req_acquire, req_clientBit, 0.U)
     final_meta_writeback.tag := request.tag
-    // The entry now describes the *new* line, owned by whoever asked for it, so
-    // its WID is the requester's -- exactly like `tag` on the line above.
-    // Previously left to WireInit(meta), which worked only because WGDirectory
-    // reported the requesting WID as `meta.wid` on a plain miss. That was the
-    // very bug the Directory fix addressed, so the directory write must now
-    // name the requester explicitly.
-    final_meta_writeback.wid := request.wid
     final_meta_writeback.hit := true.B
   }
 
