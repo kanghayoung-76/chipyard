@@ -88,7 +88,7 @@ case class WGCheckerAttachParams(
 }
 
 class TLWGChecker(params: WGCheckerParams, beatBytes: Int)(implicit p: Parameters)
-extends WGChecker(params, beatBytes) with HasTLWGControlRegMap
+extends WGChecker(params, beatBytes) with HasTLControlRegMap
 
 class WGChecker(params: WGCheckerParams, beatBytes: Int)(implicit p: Parameters)
 extends RegisterRouter(
@@ -98,7 +98,7 @@ extends RegisterRouter(
     base = params.address,
     size = params.size,
     beatBytes = beatBytes))
-with HasInterruptSources with HasTLWGControlRegMap
+with HasInterruptSources with HasTLControlRegMap 
 {
   def nInterrupts = 1 
 
@@ -159,19 +159,8 @@ with HasInterruptSources with HasTLWGControlRegMap
     }))
 
     //------------------------------------------------------------------------------------
-    // Only the trusted world (mwid) may write this checker's own configuration.
-    // controlNode is a WGTLRegisterNode (see WGRegisterRouter.scala), so its "a" channel
-    // carries WGTLCustomFieldKey and reqWid names the requester of the transaction the
-    // regmap machinery is servicing *this cycle*. concurrency defaults to 0 (unset below,
-    // and RegisterRouterParams itself defaults to 0), so there is no queue between the "a"
-    // channel and the RegField write it triggers -- reqWid always names the write actually
-    // being committed, never a later, unrelated request. If UseWGTLCustomField is off there
-    // is no WID to check at all, so every write is trusted (matches pre-WGC behavior).
-    //------------------------------------------------------------------------------------
-    val trusted = controlNode.reqWid.map(_ === mwidReg).getOrElse(true.B)
-
-    //------------------------------------------------------------------------------------
     // Register Mapping
+    // TODO: Check permission to access WGC Registers 
     //------------------------------------------------------------------------------------
     val mapping = Seq(
       WGCCtrlReg.vendor -> Seq(RegField.r(vendorReg.getWidth, vendorReg, RegFieldDesc("VENDOR", "", volatile=true))),
@@ -185,7 +174,7 @@ with HasInterruptSources with HasTLWGControlRegMap
       WGCCtrlReg.errorCauseSlotBeIp -> Seq(
         RegField(errorCauseSlotBeIpReg.res29_0.getWidth,
           RegReadFn({ valid => (true.B, errorCauseSlotBeIpReg.res29_0) }),
-          RegWriteFn({(valid, data) => when (valid && trusted) { errorCauseSlotBeIpReg.res29_0 := 0.U }; true.B }),
+          RegWriteFn({(valid, data) => when (valid) { errorCauseSlotBeIpReg.res29_0 := 0.U }; true.B }),
           RegFieldDesc("Reserved", "", volatile=true)),
         RegField(errorCauseSlotBeIpReg.b.getWidth, errorCauseSlotBeIpReg.b, RegFieldDesc("Bus_Error_Generated", "", volatile=true)),
         RegField(errorCauseSlotBeIpReg.i.getWidth, errorCauseSlotBeIpReg.i, RegFieldDesc("Interrupt_Generate", "", volatile=true))),
@@ -196,12 +185,12 @@ with HasInterruptSources with HasTLWGControlRegMap
       val m: Seq[RegField.Map] = Seq(
         WGCCtrlReg.slotBase + 0x20 * (i+1) -> Seq(RegField(r.addr.getWidth,
           RegReadFn({ valid => (true.B, r.addr) }),
-          RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.addr := data }; true.B }),
+          RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.addr := data }; true.B }),
           RegFieldDesc(s"wgcReg_${i}_Addr", "", volatile=true))),
         WGCCtrlReg.slotBase + 0x20 * (i+1) + 0x8 -> Seq(RegField(r.perm.getWidth,
           RegReadFn({ valid => (true.B, r.perm) }),
           RegWriteFn({ (valid, data) =>
-            when (valid && trusted && !r.cfg.l) {
+            when (valid) {
               r.perm := data | (3.U << mwidReg * 2.U)
             }
             true.B
@@ -210,35 +199,35 @@ with HasInterruptSources with HasTLWGControlRegMap
         WGCCtrlReg.slotBase + 0x20 * (i+1) + 0x10 -> Seq(
           RegField(r.cfg.a.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.a) }),
-            RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.cfg.a := data }; true.B }),
+            RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.cfg.a := data }; true.B }),
             RegFieldDesc(s"wgcReg_${i}_Cfg.a",  "", volatile=true)),  // <<--- make it read only after testing is done
           RegField(r.cfg.res7_2.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.res7_2) }),
-            RegWriteFn({(valid, data) => when (valid && trusted) { r.cfg.res7_2 := 0.U }; true.B}),
+            RegWriteFn({(valid, data) => when (valid) { r.cfg.res7_2 := 0.U }; true.B}),
             RegFieldDesc(s"wgcReg_${i}_Cfg.res","", volatile=true)),
           RegField(r.cfg.er.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.er) }),
-            RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.cfg.er := data }; true.B }),
+            RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.cfg.er := data }; true.B }),
             RegFieldDesc(s"wgcReg_${i}_Cfg.er", "", volatile=true)),
           RegField(r.cfg.ew.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.ew) }),
-            RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.cfg.ew := data }; true.B }),
+            RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.cfg.ew := data }; true.B }),
             RegFieldDesc(s"wgcReg_${i}_Cfg.ew", "", volatile=true)),
           RegField(r.cfg.ir.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.ir) }),
-            RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.cfg.ir := data }; true.B }),
+            RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.cfg.ir := data }; true.B }),
             RegFieldDesc(s"wgcReg_${i}_Cfg.ir", "", volatile=true)),
           RegField(r.cfg.iw.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.iw) }),
-            RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.cfg.iw := data }; true.B }),
+            RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.cfg.iw := data }; true.B }),
             RegFieldDesc(s"wgcReg_${i}_Cfg.iw", "", volatile=true)),
           RegField(r.cfg.res30_12.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.res30_12) }),
-            RegWriteFn({(valid, data) => when (valid && trusted) { r.cfg.res30_12 := 0.U }; true.B}),
+            RegWriteFn({(valid, data) => when (valid) { r.cfg.res30_12 := 0.U }; true.B}),
             RegFieldDesc(s"wgcReg_${i}_Cfg.res","", volatile=true)),
           RegField(r.cfg.l.getWidth,
             RegReadFn({ valid => (true.B, r.cfg.l) }),
-            RegWriteFn({(valid, data) => when (valid && trusted && !r.cfg.l) { r.cfg.l := data }; true.B }),
+            RegWriteFn({(valid, data) => when (valid && !r.cfg.l) { r.cfg.l := data }; true.B }),
             RegFieldDesc(s"wgcReg_${i}_Cfg.l",  "", volatile=true)))
       )
       m

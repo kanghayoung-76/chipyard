@@ -107,7 +107,6 @@ class WithNBigRocketCoresWithWGM(
           postfix = s"rockettile_${i+idOffset}",
           wid = nMaxWids-i-1,
           widWidth = log2Ceil(site(NWorlds)),
-          mwid = site(NWorlds) - 1,
           address = site(WGMarkerBaseAddressKey) + BigInt(0x100000 * i),
           size = 4096
         )
@@ -213,7 +212,6 @@ class WithOneWGAwareRocketOneRocketWithWGMarker(
                 postfix = s"rockettile_${i+idOffset}",
                 wid = i,
                 widWidth = log2Ceil(site(NWorlds)),
-                mwid = site(NWorlds) - 1,
                 address = site(WGMarkerBaseAddressKey) + BigInt(0x100000 * i),
                 size = 4096
               )
