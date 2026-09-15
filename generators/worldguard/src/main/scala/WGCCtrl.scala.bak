@@ -193,39 +193,32 @@ class Checker(nSlots: Int, paddrBits: Int, lgMaxSize: Int, wgcGranularity: Int, 
   val wgc0 = WireInit(1.U.asTypeOf(new WGC(paddrBits, wgcGranularity, lgAlign)))
   wgc0.perm := (default << (io.wid * 2.U + 1.U)) | (default << (io.wid * 2.U))
 
-  // No slot priority: OR together the permissions of every matching slot.
-  // The TOR lower bound (prevWGC) is still "the immediately preceding slot",
-  // same as before, so the zip construction is unchanged.
-  val perSlot = (io.wgc zip (wgc0 +: io.wgc)).map { case (wgc, prevWGC) =>
-    val hit     = wgc.hit(io.addr, io.size, lgMaxSize, prevWGC)
-    val ignore  = default && !wgc.cfg.l
+  //printf(p"check request - io.wid: ${io.wid}, io.addr: 0x${Hexadecimal(io.addr)}, size: ${io.size}\n")
+
+  val res = (io.wgc zip (wgc0 +: io.wgc)).reverse.foldLeft(wgc0) { case (prev, (wgc, prevWGC)) =>
+    val hit = wgc.hit(io.addr, io.size, lgMaxSize, prevWGC)
+    val ignore = default && !wgc.cfg.l
     val aligned = wgc.aligned(io.addr, io.size, lgMaxSize, prevWGC)
     dontTouch(hit)
 
     val wgc_r = wgc.perm(io.wid*2.U)
     val wgc_w = wgc.perm(io.wid*2.U+1.U)
 
-    val r = aligned && (wgc_r || ignore)
-    val w = aligned && (wgc_w || ignore)
+    val cur = WireInit(wgc)
+    val r =  aligned && (wgc_r || ignore)
+    val w =  aligned && (wgc_w || ignore)
+    cur.perm := (w << (io.wid * 2.U + 1.U)) | (r << (io.wid * 2.U))
 
-    (hit, hit && r, hit && w, wgc.cfg)
+    //printf(p"  prev: 0x${Hexadecimal(prev.addr)}, 0x${Hexadecimal(prev.perm)}, 0x${Hexadecimal(prev.cfg.a)}\n")
+    //printf(p"  prevWGC: 0x${Hexadecimal(prevWGC.addr)}, 0x${Hexadecimal(prevWGC.perm)}, 0x${Hexadecimal(prevWGC.cfg.a)}\n")
+    //printf(p"  wgc: 0x${Hexadecimal(wgc.addr)}, 0x${Hexadecimal(wgc.perm)}, 0x${Hexadecimal(wgc.cfg.a)}\n")
+    //printf(p"  hit: $hit, ignore: $ignore, aligned: $aligned, wgc_r: $wgc_r wgc_w: $wgc_w\n")
+
+    Mux(hit, cur, prev)
   }
 
-  val anyHit = if (perSlot.isEmpty) false.B else perSlot.map(_._1).reduce(_ || _)
-  val anyR   = if (perSlot.isEmpty) false.B else perSlot.map(_._2).reduce(_ || _)
-  val anyW   = if (perSlot.isEmpty) false.B else perSlot.map(_._3).reduce(_ || _)
-
-  // No slot matched: fall back to default (= wid==mwid), same as before.
-  io.r := Mux(anyHit, anyR, default)
-  io.w := Mux(anyHit, anyW, default)
-
-  // Side-effect reporting bits (er/ew/ir/iw) are also ORed across matching slots.
-  val cfgOut = WireInit(0.U.asTypeOf(new WGCConfig))
-  cfgOut.er := perSlot.map { case (h, _, _, c) => h && c.er }.foldLeft(false.B)(_ || _)
-  cfgOut.ew := perSlot.map { case (h, _, _, c) => h && c.ew }.foldLeft(false.B)(_ || _)
-  cfgOut.ir := perSlot.map { case (h, _, _, c) => h && c.ir }.foldLeft(false.B)(_ || _)
-  cfgOut.iw := perSlot.map { case (h, _, _, c) => h && c.iw }.foldLeft(false.B)(_ || _)
-  io.cfg := cfgOut
-
+  io.r    := res.perm(io.wid*2.U)
+  io.w    := res.perm(io.wid*2.U+1.U)
+  io.cfg  := res.cfg
   io.perm := io.wgc(0).perm
 }
