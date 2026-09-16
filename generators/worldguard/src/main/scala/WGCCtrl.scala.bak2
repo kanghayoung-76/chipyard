@@ -187,14 +187,6 @@ class Checker(nSlots: Int, paddrBits: Int, lgMaxSize: Int, wgcGranularity: Int, 
     val w = Output(Bool())
     val cfg = Output(new WGCConfig)
     val perm = Output(UInt(64.W))
-    // Spec 3.1.3/3.1.5 slot[0]: NOT one of the `nSlots` matchable rules below (it
-    // is never part of io.wgc / perSlot / anyHit, so it never affects io.r/io.w).
-    // Its only role is deciding how a transaction that hits *no* real slot gets
-    // reported -- its cfg.{er,ew,ir,iw} are used for that report, as opposed to a
-    // transaction that hits a real slot but is denied by it, which reports that
-    // slot's own cfg via cfgOut below. (Unrelated to the local `wgc0` wire further
-    // down, which is just this module's existing synthetic TOR lower bound.)
-    val slot0Cfg = Input(new WGCConfig)
   })
 
   val default = if (io.wgc.isEmpty) true.B else io.wid === io.mwid
@@ -233,10 +225,7 @@ class Checker(nSlots: Int, paddrBits: Int, lgMaxSize: Int, wgcGranularity: Int, 
   cfgOut.ew := perSlot.map { case (h, _, _, c) => h && c.ew }.foldLeft(false.B)(_ || _)
   cfgOut.ir := perSlot.map { case (h, _, _, c) => h && c.ir }.foldLeft(false.B)(_ || _)
   cfgOut.iw := perSlot.map { case (h, _, _, c) => h && c.iw }.foldLeft(false.B)(_ || _)
-  // A denial where some real slot matched reports that slot's (OR'd) cfg; a
-  // denial where nothing matched at all (a "hole") falls back to slot[0]'s cfg.
-  // These two policies are deliberately kept separate, never merged.
-  io.cfg := Mux(anyHit, cfgOut, io.slot0Cfg)
+  io.cfg := cfgOut
 
   io.perm := io.wgc(0).perm
 }

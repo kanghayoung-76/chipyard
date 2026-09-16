@@ -143,26 +143,6 @@ with HasInterruptSources with HasTLWGControlRegMap
     })
     val errorAddrReg              = RegInit(0.U(64.W)) // why is it 32 bit ? phsicall address space is 64(47) bits...
 
-    // Spec 3.1.3/3.1.5 slot[0]: addr/perm/cfg.a are hardwired constants (first
-    // byte of the checker's guarded range, no permissions, OFF), never part of
-    // the nSlots matchable-rule array (params.nSlots doesn't count it, and it is
-    // NOT included in wgchecker.io.wgc below). Only cfg.{er,ew,ir,iw,l} are real,
-    // writable state: they set the fallback report policy for an access that
-    // doesn't hit any real slot (a "hole"), separately from the policy a real,
-    // denying slot reports for its own hits (see Checker.io.cfg's Mux).
-    val slot0CfgReg                = RegInit({
-      val w = Wire(new WGCConfig)
-      w.l         := false.B
-      w.res30_12  := 0.U
-      w.iw        := false.B
-      w.ir        := false.B
-      w.ew        := false.B
-      w.er        := false.B
-      w.res7_2    := 0.U
-      w.a         := 0.U
-      w
-    })
-
     val wgcReg                    = RegInit(VecInit(Seq.fill(params.nSlots) {
       val w = Wire(new WGCReg(params.paddrBits, params.granularity, params.lgAlign))
       w.addr          := 0.U
@@ -210,43 +190,6 @@ with HasInterruptSources with HasTLWGControlRegMap
         RegField(errorCauseSlotBeIpReg.b.getWidth, errorCauseSlotBeIpReg.b, RegFieldDesc("Bus_Error_Generated", "", volatile=true)),
         RegField(errorCauseSlotBeIpReg.i.getWidth, errorCauseSlotBeIpReg.i, RegFieldDesc("Interrupt_Generate", "", volatile=true))),
       WGCCtrlReg.errorAddr -> Seq(RegField.r(errorAddrReg.getWidth, errorAddrReg, RegFieldDesc("ERROR_ADDR", "", volatile=true))),
-    )
-
-    // Spec slot[0]: addr/perm/cfg.a/cfg.res are fixed, read-only (any write is
-    // silently dropped, same as reading a RegField with no RegWriteFn); only
-    // cfg.{er,ew,ir,iw,l} are real registers, gated exactly like every other
-    // slot's fields (trusted + not-yet-locked to write, l itself only needs
-    // trusted). Field widths/order mirror wgcRegMap's cfg word below exactly so
-    // the two slots share the same 0x20-stride layout, just at index 0.
-    val slot0RegMap: Seq[RegField.Map] = Seq(
-      WGCCtrlReg.slotBase -> Seq(RegField.r(wgcReg(0).addr.getWidth, 0.U(wgcReg(0).addr.getWidth.W),
-        RegFieldDesc("wgcReg_slot0_Addr", "", volatile=true))),
-      WGCCtrlReg.slotBase + 0x8 -> Seq(RegField.r(64, 0.U(64.W),
-        RegFieldDesc("wgcReg_slot0_Perm", "", volatile=true))),
-      WGCCtrlReg.slotBase + 0x10 -> Seq(
-        RegField.r(2, 0.U(2.W), RegFieldDesc("wgcReg_slot0_Cfg.a", "", volatile=true)),
-        RegField.r(6, 0.U(6.W), RegFieldDesc("wgcReg_slot0_Cfg.res", "", volatile=true)),
-        RegField(slot0CfgReg.er.getWidth,
-          RegReadFn({ valid => (true.B, slot0CfgReg.er) }),
-          RegWriteFn({(valid, data) => when (valid && trusted && !slot0CfgReg.l) { slot0CfgReg.er := data }; true.B }),
-          RegFieldDesc("wgcReg_slot0_Cfg.er", "", volatile=true)),
-        RegField(slot0CfgReg.ew.getWidth,
-          RegReadFn({ valid => (true.B, slot0CfgReg.ew) }),
-          RegWriteFn({(valid, data) => when (valid && trusted && !slot0CfgReg.l) { slot0CfgReg.ew := data }; true.B }),
-          RegFieldDesc("wgcReg_slot0_Cfg.ew", "", volatile=true)),
-        RegField(slot0CfgReg.ir.getWidth,
-          RegReadFn({ valid => (true.B, slot0CfgReg.ir) }),
-          RegWriteFn({(valid, data) => when (valid && trusted && !slot0CfgReg.l) { slot0CfgReg.ir := data }; true.B }),
-          RegFieldDesc("wgcReg_slot0_Cfg.ir", "", volatile=true)),
-        RegField(slot0CfgReg.iw.getWidth,
-          RegReadFn({ valid => (true.B, slot0CfgReg.iw) }),
-          RegWriteFn({(valid, data) => when (valid && trusted && !slot0CfgReg.l) { slot0CfgReg.iw := data }; true.B }),
-          RegFieldDesc("wgcReg_slot0_Cfg.iw", "", volatile=true)),
-        RegField.r(19, 0.U(19.W), RegFieldDesc("wgcReg_slot0_Cfg.res2", "", volatile=true)),
-        RegField(slot0CfgReg.l.getWidth,
-          RegReadFn({ valid => (true.B, slot0CfgReg.l) }),
-          RegWriteFn({(valid, data) => when (valid && trusted && !slot0CfgReg.l) { slot0CfgReg.l := data }; true.B }),
-          RegFieldDesc("wgcReg_slot0_Cfg.l", "", volatile=true)))
     )
 
     val wgcRegMap = wgcReg.zipWithIndex.map { case (r, i) =>
@@ -300,7 +243,7 @@ with HasInterruptSources with HasTLWGControlRegMap
       )
       m
     }
-    regmap(mapping ++ slot0RegMap ++ wgcRegMap.flatten.toSeq:_*)
+    regmap(mapping ++ wgcRegMap.flatten.toSeq:_*)
 
     (wgc_node.in zip wgc_node.out) foreach {
       case ((in, edgeIn), (out, edgeOut)) => {
@@ -309,7 +252,6 @@ with HasInterruptSources with HasTLWGControlRegMap
         val wgchecker = Module(new Checker(params.nSlots, params.paddrBits, params.lgMaxSize, params.granularity, params.lgAlign, params.widWidth))
         wgchecker.io.mwid := mwidReg
         wgchecker.io.wgc  := wgcReg.map(WGC(_, params.paddrBits, params.granularity, params.lgAlign))
-        wgchecker.io.slot0Cfg := slot0CfgReg
 
         // IO between wgchecker and Bundle A
         wgchecker.io.size := in.a.bits.size
