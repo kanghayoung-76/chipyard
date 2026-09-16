@@ -115,8 +115,8 @@ class RocketVCU118FMCSDConfig extends Config(
 
 // ================= WorldGuard configs (ported from Vyond chipyard-1.13) =================
 // 8-world (nWorlds=8, widWidth=3) WorldGuard-aware Rocket, SD card on FMC (TB-FMCL-PH).
-// Pinned to 50 MHz: matches the timing point WorldGuard was verified at on Vyond's
-// chipyard-1.13/1.11.0 (WithVCU118FMCSDTweaks defaults to 100 MHz).
+// Pinned to 100 MHz: every WorldGuard bitstream built and hardware-validated on this
+// board so far (bugs 1-5) has been built and timed at 100 MHz.
 class WGRocket8VCU118Config extends Config(
   new WithFPGAFreq100MHz ++
   new WithVCU118FMCSDTweaks ++
