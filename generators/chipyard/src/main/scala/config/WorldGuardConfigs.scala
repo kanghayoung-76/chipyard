@@ -30,7 +30,7 @@ class WGRocket8Config extends Config(
 // 32-world ceiling; also bisects the cross-enclave SHM data-visibility issue
 // seen at 32 worlds (works at widWidth=3, broken at widWidth=5).
 class WGRocket16Config extends Config(
-  new worldguard.WithWorldGuard(nWorlds = 16, nSlots = 4) ++
+  new worldguard.WithWorldGuard(nWorlds = 16, nSlots = 16) ++
   new worldguard.WithWGRocketNBigCores(1) ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new chipyard.config.AbstractConfig)

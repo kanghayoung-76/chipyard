@@ -123,6 +123,14 @@ class WGRocket8VCU118Config extends Config(
   new chipyard.WGRocket8Config
 )
 
+// 16-world (nWorlds=16, widWidth=4) WorldGuard-aware Rocket. Identical to
+// WGRocket8VCU118Config except for the underlying 16-world core config.
+class WGRocket16VCU118Config extends Config(
+  new WithFPGAFreq100MHz ++
+  new WithVCU118FMCSDTweaks ++
+  new chipyard.WGRocket16Config
+)
+
 
 // DOC RISC-V VELA 
 class WithVelaTestHarness extends Config((site, here, up) => {
