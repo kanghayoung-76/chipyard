@@ -27,8 +27,15 @@ import worldguard.rocket._
 
 case object NWorlds extends Field[Int](4)
 
+// DRAM memport 체커의 슬롯 수.  WithWorldGuard의 nSlots가 주변장치 체커
+// 셋에만 닿고 memport 체커에는 닿지 않아서, 16슬롯 빌드가 실제로 슬롯을
+// 쓰는 유일한 체커는 8개인 채로 나왔다.  SM이 슬롯을 할당·회수하는 곳은
+// memport 체커뿐이다.
+case object NWGSlots extends Field[Int](8)
+
 class WithWorldGuard(nWorlds: Int, nSlots: Int) extends Config((site, here, up) => {
   case NWorlds => nWorlds
+  case NWGSlots => nSlots
   case UseWGTLCustomField => true
   case WGMarkerBaseAddressKey => BigInt(0x2100000)
   case WGPeripheryKey=> {
@@ -42,7 +49,7 @@ class WithWorldGuard(nWorlds: Int, nSlots: Int) extends Config((site, here, up) 
         postfix = "wgpexample",
         mwid      = nWorlds - 1,
         widWidth  = log2Ceil(nWorlds),
-        nSlots    = nSlots,
+        nSlots    = 2,
         address   = 0x6005000,
         size      = 4096)
       )
@@ -57,7 +64,7 @@ class WithWorldGuard(nWorlds: Int, nSlots: Int) extends Config((site, here, up) 
         postfix = "wgpplic",
         mwid      = nWorlds - 1,
         widWidth  = log2Ceil(nWorlds),
-        nSlots    = nSlots,
+        nSlots    = 2,
         address   = 0x6003000,
         size      = 4096)
       )
@@ -70,7 +77,7 @@ class WithWorldGuard(nWorlds: Int, nSlots: Int) extends Config((site, here, up) 
         postfix = "wgpbootrom",
         mwid      = nWorlds - 1,
         widWidth  = log2Ceil(nWorlds),
-        nSlots    = nSlots,
+        nSlots    = 2,
         address   = 0x6004000,
         size      = 4096)
     )
