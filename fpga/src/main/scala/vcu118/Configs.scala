@@ -131,6 +131,14 @@ class WGRocket16VCU118Config extends Config(
   new chipyard.WGRocket16Config
 )
 
+// 32-world (nWorlds=32, widWidth=5). perm 이 world 당 2비트라
+// 32*2 = 64비트로 perm 레지스터가 정확히 꽉 찬다. 아키텍처 상한.
+class WGRocket32VCU118Config extends Config(
+  new WithFPGAFreq100MHz ++
+  new WithVCU118FMCSDTweaks ++
+  new chipyard.WGRocket32Config
+)
+
 
 // DOC RISC-V VELA 
 class WithVelaTestHarness extends Config((site, here, up) => {

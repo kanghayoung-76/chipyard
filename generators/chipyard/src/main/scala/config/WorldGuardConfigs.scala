@@ -38,7 +38,7 @@ class WGRocket16Config extends Config(
 // Architectural maximum: 32 worlds (widWidth=5). perm is 2 bits/world, so
 // 32*2 = 64 bits exactly fills the perm register; 33+ would overflow.
 class WGRocket32Config extends Config(
-  new worldguard.WithWorldGuard(nWorlds = 32, nSlots = 4) ++
+  new worldguard.WithWorldGuard(nWorlds = 32, nSlots = 32) ++
   new worldguard.WithWGRocketNBigCores(1) ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new chipyard.config.AbstractConfig)
