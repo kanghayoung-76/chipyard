@@ -30,3 +30,6 @@ project/project/
 .classpath_cache/
 .vscode/
 tests/build/
+
+# Local FPGA reference artifacts (bitstream + reports); 31 MB, not for the repo
+wgdma-fbus-reference/

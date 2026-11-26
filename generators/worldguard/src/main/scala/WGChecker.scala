@@ -36,7 +36,11 @@ case class WGCheckerParams(
   paddrBits: Int    = 64,
   lgMaxSize: Int    = 3,   // 2^3=8bytes
   granularity: Int  = 4,   // 4bytes
-  lgAlign: Int      = 2    // 2^2=4bytes
+  lgAlign: Int      = 2,   // 2^2=4bytes
+  // Publish this checker's rule state so the L2 can consult it before a
+  // cross-WID eviction (see WGL2EvictGuard.scala). Only the memory-port
+  // checker sets this; the others are not on the eviction path.
+  exportState: Boolean = false
 ) extends DeviceParams
 
 case class WGCheckerAttachParams(
@@ -115,6 +119,12 @@ with HasInterruptSources with HasTLWGControlRegMap
       )
     }
   ) 
+
+  // Rule state for the L2's eviction guard. Absent unless asked for, so builds
+  // without the guard keep exactly the hierarchy they have today.
+  val guardSourceOpt =
+    if (params.exportState) Some(BundleBridgeSource(() => WGCheckerState(params)))
+    else None
 
   lazy val module = new Impl
   class Impl extends LazyModuleImp(this) {
@@ -301,6 +311,14 @@ with HasInterruptSources with HasTLWGControlRegMap
       m
     }
     regmap(mapping ++ slot0RegMap ++ wgcRegMap.flatten.toSeq:_*)
+
+    // Publish the rule state for the L2's eviction guard. Same expansion the
+    // Checker instance below is given, so the two cannot drift apart.
+    guardSourceOpt.foreach { src =>
+      src.bundle.mwid     := mwidReg
+      src.bundle.wgc      := VecInit(wgcReg.map(WGC(_, params.paddrBits, params.granularity, params.lgAlign)))
+      src.bundle.slot0Cfg := slot0CfgReg
+    }
 
     (wgc_node.in zip wgc_node.out) foreach {
       case ((in, edgeIn), (out, edgeOut)) => {

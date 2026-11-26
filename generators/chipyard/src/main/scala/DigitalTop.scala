@@ -43,6 +43,7 @@ class DigitalTop(implicit p: Parameters) extends ChipyardSystem
   with constellation.soc.CanHaveGlobalNoC // Support instantiating a global NoC interconnect
   with rerocc.CanHaveReRoCCTiles // Support tiles that instantiate rerocc-attached accelerators
   with worldguard.examples.CanHaveWGPeriphery // WG example MMIO periphery (WGC-guarded)
+  with worldguard.examples.CanHaveWGDMA // WID-marked memcpy DMA (device-side WorldGuard)
 {
   override lazy val module = new DigitalTopModule(this)
 }

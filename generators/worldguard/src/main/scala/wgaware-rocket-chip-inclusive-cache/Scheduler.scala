@@ -31,7 +31,8 @@ import chisel3.experimental.dataview._
 
 import sifive.blocks.inclusivecache._
 
-class WGInclusiveCacheBankScheduler(params: InclusiveCacheParameters, widBits: Int) extends Module
+class WGInclusiveCacheBankScheduler(params: InclusiveCacheParameters, widBits: Int,
+  wgGuard: Option[WGCheckerParams] = None) extends Module
 {
   val io = IO(new Bundle {
     val in = Flipped(TLBundle(params.inner.bundle))
@@ -44,6 +45,8 @@ class WGInclusiveCacheBankScheduler(params: InclusiveCacheParameters, widBits: I
     val resp = Decoupled(new WGSourceXRequest(params, widBits))
     // WG debug counters (exposed via L2 control MMIO 0x300..0x378)
     val dbg = Output(Vec(16, UInt(32.W)))
+    // Memory-port checker rule state, present only with the eviction guard on.
+    val wgGuardState = wgGuard.map(cp => Input(WGCheckerState(cp)))
   })
   // Sinks and Sources except A don't need to have wid but they have in order to have the same WGFullRequest
   val sourceA = Module(new WGSourceA(params, widBits))
@@ -78,7 +81,7 @@ class WGInclusiveCacheBankScheduler(params: InclusiveCacheParameters, widBits: I
   val bankedStore = Module(new BankedStore(params))
   val requests = Module(new ListBuffer(ListBufferParameters(new WGQueuedRequest(params, widBits), 3*params.mshrs, params.secondary, false)))
   println(s"[l2cache] num mshrs: ${params.mshrs}")
-  val mshrs = Seq.fill(params.mshrs) { Module(new WGMSHR(params, widBits)) }    // 7
+  val mshrs = Seq.fill(params.mshrs) { Module(new WGMSHR(params, widBits, wgGuard.isDefined)) }    // 7
   val abc_mshrs = mshrs.init.init                                    // [0:4]
   val bc_mshr = mshrs.init.last                                      // [5]
   val c_mshr = mshrs.last                                            // [6]
@@ -376,6 +379,33 @@ class WGInclusiveCacheBankScheduler(params: InclusiveCacheParameters, widBits: I
   sinkD  .io.grant_safe := sourceD.io.grant_safe
 
   // --- WG debug counters (read via L2 control MMIO; free-running, reset only on FPGA reload) ---
+  // [WGL2EvictGuard] A Checker fed the memory-port checker's own rule state, so
+  // the answer the L2 acts on is the answer that checker would give. Inputs are
+  // driven at the eviction site below; tied off here so the module is complete.
+  val wgGuardCheckOpt = wgGuard.zip(io.wgGuardState).headOption.map { case (cp, st) =>
+    val chk = Module(new Checker(cp.nSlots, cp.paddrBits, cp.lgMaxSize,
+                                 cp.granularity, cp.lgAlign, cp.widWidth))
+    chk.io.mwid     := st.mwid
+    chk.io.wgc      := st.wgc
+    chk.io.slot0Cfg := st.slot0Cfg
+    // The directory result goes to exactly one MSHR per cycle, so one Checker
+    // serves them all: select the query belonging to whichever is being told.
+    chk.io.addr := Mux1H(directoryFanout, mshrs.map(_.io.wgGuardAddr.get))
+    chk.io.wid  := Mux1H(directoryFanout, mshrs.map(_.io.wgGuardWid.get))
+    chk.io.size := cp.lgMaxSize.U
+    dontTouch(chk.io.r)
+    dontTouch(chk.io.w)
+    chk
+  }
+
+  // A line may only be evicted for a requester allowed to both read and write
+  // the address: an evict-and-refill makes the line that requester's, so
+  // anything less would leave a line whose WID no slot admits (breaking I1).
+  mshrs.foreach { m =>
+    m.io.wgEvictDenied.foreach { _ :=
+      wgGuardCheckOpt.map(c => !(c.io.r && c.io.w)).getOrElse(false.B) }
+  }
+
   val dbg_oth   = RegInit(0.U(32.W))  // cross-WID onlyTagHit (!hit) directory results
   val dbg_rel   = RegInit(0.U(32.W))  // outer C-channel release fires (writebacks/evictions)
   val dbg_stall = RegInit(0.U(32.W))  // cycles a request was valid but not accepted

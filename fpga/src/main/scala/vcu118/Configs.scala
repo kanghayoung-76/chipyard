@@ -139,6 +139,26 @@ class WGRocket32VCU118Config extends Config(
   new chipyard.WGRocket32Config
 )
 
+// 32-world build plus a WID-marked DMA engine (device-side WorldGuard evidence).
+// Identical to WGRocket32VCU118Config except for the added engine + its marker.
+//   DMA control regs : 0x2030000
+//   DMA WGMarker     : 0x2040000  (wid at +0x08, writable only by mwid=31)
+class WGRocket32DMAVCU118Config extends Config(
+  new WithFPGAFreq100MHz ++
+  new WithVCU118FMCSDTweaks ++
+  new worldguard.examples.WithWGDMA(wid = 1) ++
+  new chipyard.WGRocket32Config
+)
+
+// Four-hart build for cross-hart measurements. Same 32-world / 32-slot
+// WorldGuard setup as WGRocket32VCU118Config, no DMA; only the hart count
+// differs.
+class WGRocket32x4VCU118Config extends Config(
+  new WithFPGAFreq100MHz ++
+  new WithVCU118FMCSDTweaks ++
+  new chipyard.WGRocket32x4Config
+)
+
 
 // DOC RISC-V VELA 
 class WithVelaTestHarness extends Config((site, here, up) => {

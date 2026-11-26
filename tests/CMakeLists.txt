@@ -11,7 +11,7 @@
 ########################################################################################################################
 cmake_minimum_required(VERSION 3.10)
 
-project(chipyard-tests LANGUAGES C CXX)
+project(chipyard-tests LANGUAGES C CXX ASM)
 
 
 #################################
@@ -85,6 +85,13 @@ add_executable(spiflashwrite spiflashwrite.c)
 add_executable(fft fft.c)
 add_executable(gcd gcd.c)
 add_executable(hello hello.c)
+add_executable(wgdma wgdma.c)
+add_executable(widobs widobs.c widobs_asm.S)
+add_executable(dgrant dgrant.c trapsave.S)
+add_executable(htifmin htifmin.c)
+add_executable(c3test c3test.c trapsave.S)
+add_executable(c2test c2test.c trapsave.S)
+add_executable(step step.c trapsave.S)
 add_executable(mt-hello mt-hello.c)
 add_executable(symmetric symmetric.c)
 

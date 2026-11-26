@@ -28,6 +28,7 @@ import worldguard.examples._
 class ChipyardSystem(implicit p: Parameters) extends ChipyardSubsystem
   with HasAsyncExtInterrupts
   with CanHaveMasterTLMemPort // export TL port for outer memory
+  with worldguard.CanHaveWGL2EvictGuard // holds the L2's eviction-guard sink
   with CanHaveWGMasterAXI4MemPort // expose AXI port for outer mem (WGChecker in front)
   //with CanHaveMasterAXI4MemPort // expose AXI port for outer mem
   with CanHaveMasterAXI4MMIOPort
@@ -97,17 +98,24 @@ trait CanHaveMasterTLMemPort { this: BaseSubsystem =>
 
   // WGChecker on the TL mem port so DRAM behind this port is WID-filtered
   // (ported from chipyard-1.11 / Vyond)
-  private val wgcParams = WGCheckerParams(
-    postfix = s"wgp_memport_",
-    mwid      = p(NWorlds) - 1,
-    widWidth  = log2Ceil(p(NWorlds)),
-    nSlots    = p(NWGSlots),
-    address   = 0x6000000,
-    size      = 4096,
-    lgMaxSize = 6,
-    granularity = 64,
-    lgAlign = 6)
+  // Built from the shared helper so the L2's eviction guard sizes its Checker
+  // replica from exactly these parameters and cannot drift from this checker.
+  private val wgcParams = WGMemPortCheckerParams(p)
   private val wgc = WGCheckerAttachParams(wgcParams).attachTo(this)
+
+  // Hand the checker's rule state to the L2, if it asked for it. The L2 is
+  // built earlier (with the bus topology) and parked its sink on the subsystem.
+  wgc.guardSourceOpt.foreach { src =>
+    this match {
+      case s: CanHaveWGL2EvictGuard => s.wgl2GuardSink match {
+        case Some(snk) => snk := src
+        case None => require(false,
+          "WGL2EvictGuardKey is set but the L2 registered no eviction-guard sink")
+      }
+      case _ => require(false,
+        "WGL2EvictGuardKey is set but the subsystem does not mix in CanHaveWGL2EvictGuard")
+    }
+  }
 
   // disable inwards monitors from node since the class with this trait (i.e. DigitalTop)
   // doesn't provide an implicit clock to those monitors

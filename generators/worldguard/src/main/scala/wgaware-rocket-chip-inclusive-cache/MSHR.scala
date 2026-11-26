@@ -69,7 +69,8 @@ class WGNestedWriteback(params: InclusiveCacheParameters, widBits: Int) extends 
   val c_set_dirty = Bool() // nested Releases MAY set dirty
 }
 
-class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
+class WGMSHR(params: InclusiveCacheParameters, widBits: Int,
+  wgEvictGuard: Boolean = false) extends Module
 {
   val io = IO(new Bundle {
     val allocate  = Flipped(Valid(new WGAllocateRequest(params, widBits))) // refills MSHR for next cycle  // Input to indicate that this entry is allocated
@@ -80,6 +81,12 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
     val sinkd     = Flipped(Valid(new SinkDResponse(params)))
     val sinke     = Flipped(Valid(new SinkEResponse(params)))
     val nestedwb  = Flipped(new WGNestedWriteback(params, widBits))
+    // [WGL2EvictGuard] The address/WID this MSHR would evict on behalf of, and
+    // the shared Checker's verdict for it. One Checker serves every MSHR
+    // because the directory result is delivered to exactly one of them.
+    val wgGuardAddr    = if (wgEvictGuard) Some(Output(UInt(params.outer.bundle.addressBits.W))) else None
+    val wgGuardWid     = if (wgEvictGuard) Some(Output(UInt(widBits.W))) else None
+    val wgEvictDenied  = if (wgEvictGuard) Some(Input(Bool())) else None
   })
 
   val request_valid = RegInit(false.B)
@@ -139,6 +146,11 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
   val sink = Reg(UInt(params.outer.bundle.sinkBits.W))
   val gotT = Reg(Bool())
   val bad_grant = Reg(Bool())
+  // [WGL2EvictGuard] Latched for the response: this request was refused because
+  // the requester may not cause a cross-WID eviction, so its Grant is denied.
+  // Declared here, next to bad_grant, because it is read further up the file
+  // than the eviction logic that sets it -- a forward reference would be null.
+  val wgRefused = RegInit(false.B)
   val probes_done = Reg(UInt(params.clientBits.W))
   val probes_toN = Reg(UInt(params.clientBits.W))
   val probes_noT = Reg(Bool())
@@ -329,7 +341,7 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
                                          NtoT -> NtoT)))
   io.schedule.bits.d.bits.sink    := 0.U
   io.schedule.bits.d.bits.way     := meta.way
-  io.schedule.bits.d.bits.bad     := bad_grant
+  io.schedule.bits.d.bits.bad     := bad_grant || wgRefused
   io.schedule.bits.d.bits.wid     := request.wid 
   io.schedule.bits.e.bits.sink    := sink
   io.schedule.bits.e.bits.wid     := request.wid
@@ -543,6 +555,21 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
   val new_meta = Mux(io.allocate.valid && io.allocate.bits.repeat, final_meta_writeback, io.directory.bits)
   val new_request = Mux(io.allocate.valid, allocate_as_full, request)
   val new_needT = needT(new_request.opcode, new_request.param)
+
+  // [WGL2EvictGuard] A cross-WID miss (onlyTagHit && !hit) matches on tag, so the
+  // victim sits at the address being requested -- that is the address whose
+  // permission decides whether this requester may cause the eviction.
+  io.wgGuardAddr.foreach { _ :=
+    params.restoreAddress(params.expandAddress(new_meta.tag, new_request.set, 0.U)) }
+  io.wgGuardWid.foreach { _ := new_request.wid }
+
+  // Refuse only a cross-WID eviction the requester has no right to cause.
+  // A permitted sharer, a same-WID hit and an ordinary capacity eviction (tag
+  // mismatch, so not onlyTagHit) all fall through to the existing behaviour,
+  // which is what keeps I1 intact.
+  val wgEvictRefuse = io.wgEvictDenied.map { denied =>
+    new_meta.onlyTagHit && !new_meta.hit && new_meta.state =/= INVALID && denied
+  }.getOrElse(false.B)
   val new_clientBit = params.clientBit(new_request.source)
   val new_skipProbe = Mux(skipProbeN(new_request.opcode, params.cache.hintsSkipProbe), new_clientBit, 0.U)
 
@@ -582,6 +609,7 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
     probes_noT := false.B
     gotT := false.B
     bad_grant := false.B
+    wgRefused := wgEvictRefuse
 
     // These should already be either true or turning true
     // We clear them here explicitly to simplify the mux tree
@@ -647,6 +675,16 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
     // For A channel requests
     .otherwise { // new_request.prio(0) && !new_request.control
       s_execute := false.B
+      // [WGL2EvictGuard] The requester may not touch this address, so it may
+      // not make us throw the owner's line out either. Schedule nothing but the
+      // (denied) response: no release, no acquire, no directory write, so the
+      // line and its dirty data survive exactly as they were. An Acquire still
+      // owes us a GrantAck even when the Grant is denied.
+      when (wgEvictRefuse) {
+        when (new_request.opcode === AcquireBlock || new_request.opcode === AcquirePerm) {
+          w_grantack := false.B
+        }
+      } .otherwise {
       // Do we need an eviction?
       when (!new_meta.hit && new_meta.state =/= INVALID) {
         s_release := false.B
@@ -695,6 +733,7 @@ class WGMSHR(params: InclusiveCacheParameters, widBits: Int) extends Module
       // Becomes dirty?
       when (!new_request.opcode(2) && new_meta.hit && !new_meta.dirty) {
         s_writeback := false.B
+      }
       }
     }
   }

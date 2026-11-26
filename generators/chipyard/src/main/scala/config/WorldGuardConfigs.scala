@@ -37,11 +37,34 @@ class WGRocket16Config extends Config(
 
 // Architectural maximum: 32 worlds (widWidth=5). perm is 2 bits/world, so
 // 32*2 = 64 bits exactly fills the perm register; 33+ would overflow.
+// The L2 cross-WID eviction guard is on from here down: before evicting a line
+// that belongs to another WID, the L2 asks the memory-port checker whether the
+// requester may touch the address, and refuses without evicting when it may
+// not. Permitted sharers take the path they always took.
 class WGRocket32Config extends Config(
+  new worldguard.WithWGL2EvictGuard ++
   new worldguard.WithWorldGuard(nWorlds = 32, nSlots = 32) ++
   new worldguard.WithWGRocketNBigCores(1) ++
   new freechips.rocketchip.subsystem.WithoutTLMonitors ++
   new chipyard.config.AbstractConfig)
+
+// Four-hart variant of WGRocket32Config, for measuring cross-hart paths.
+// Only the core count differs: nWorlds/nSlots and every checker stay as they
+// are (checkers are per-resource, not per-hart, so hart count does not add
+// any). No DMA -- WGDMAKey defaults to None, so CanHaveWGDMA builds nothing.
+class WGRocket32x4Config extends Config(
+  new worldguard.WithWGL2EvictGuard ++
+  new worldguard.WithWorldGuard(nWorlds = 32, nSlots = 32) ++
+  new worldguard.WithWGRocketNBigCores(4) ++
+  new freechips.rocketchip.subsystem.WithoutTLMonitors ++
+  new chipyard.config.AbstractConfig)
+
+// Simulation counterpart of WGRocket32DMAVCU118Config: same core/WG settings
+// plus the WID-marked DMA, without the VCU118 harness. Used to exercise the
+// four device-side WorldGuard cases before committing to a bitstream.
+class WGRocket32DMAConfig extends Config(
+  new worldguard.examples.WithWGDMA(wid = 1) ++
+  new chipyard.WGRocket32Config)
 
 class WGRocketAndRocketWithWGM extends Config(
   new worldguard.WithWorldGuard(nWorlds = 4, nSlots = 4) ++
