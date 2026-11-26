@@ -33,3 +33,10 @@ tests/build/
 
 # Local FPGA reference artifacts (bitstream + reports); 31 MB, not for the repo
 wgdma-fbus-reference/
+
+# Editor/manual backup copies -- keep them locally, never in the repo
+*.bak
+*.old
+*.orig
+*.rej
+*~
